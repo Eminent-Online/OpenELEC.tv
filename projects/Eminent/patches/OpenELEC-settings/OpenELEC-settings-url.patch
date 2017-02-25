@@ -1,0 +1,90 @@
+diff --git a/src/defaults.py b/src/defaults.py
+index 453513b..e9ef949 100644
+--- a/src/defaults.py
++++ b/src/defaults.py
+@@ -84,8 +84,8 @@ system = {
+     'ENABLED': True,
+     'KERNEL_CMD': '/proc/cmdline',
+     'SET_CLOCK_CMD': '/sbin/hwclock --systohc --utc',
+-    'UPDATE_REQUEST_URL': 'http://update.openelec.tv/updates.php',
+-    'UPDATE_DOWNLOAD_URL': 'http://%s.openelec.tv/%s',
++    'UPDATE_REQUEST_URL': 'http://www.venztv.com/ota/update.php',
++    'UPDATE_DOWNLOAD_URL': 'http://www.venztv.com/%s/%s',
+     'LOCAL_UPDATE_DIR': '/storage/.update/',
+     'GET_CPU_FLAG': "cat /proc/cpuinfo | grep -q 'flags.* lm ' && echo '1' || echo '0'",
+     'XBMC_RESET_FILE': '%s/reset_xbmc' % CONFIG_CACHE,
+diff --git a/src/oe.py b/src/oe.py
+index 52a0010..b5bae02 100644
+--- a/src/oe.py
++++ b/src/oe.py
+@@ -41,6 +41,7 @@ import subprocess
+ import dbus
+ import dbus.mainloop.glib
+ import defaults
++import base64
+ 
+ from xml.dom import minidom
+ 
+@@ -756,7 +757,7 @@ def parse_os_release():
+ 
+ 
+ def get_os_release():
+-    distribution = version = architecture = build = ''
++    distribution = version = architecture = build = dev = ''
+     os_release_info = parse_os_release()
+     if os_release_info is not None:
+         if 'NAME' in os_release_info:
+@@ -769,11 +770,14 @@ def get_os_release():
+             architecture = os_release_info['OPENELEC_ARCH']
+         if 'OPENELEC_BUILD' in os_release_info:
+             build = os_release_info['OPENELEC_BUILD']
++        if 'DEVICE' in os_release_info:
++            dev = os_release_info['DEVICE']
+         return (
+             distribution,
+             version,
+             architecture,
+             build,
++            dev,
+             )
+ 
+ 
+@@ -788,6 +792,7 @@ DISTRIBUTION = os_release_data[0]
+ VERSION = os_release_data[1]
+ ARCHITECTURE = os_release_data[2]
+ BUILD = os_release_data[3]
++DEV = os_release_data[4]
+ DOWNLOAD_DIR = '/storage/downloads'
+ XBMC_USER_HOME = os.environ.get('XBMC_USER_HOME', '/storage/.kodi')
+ CONFIG_CACHE = os.environ.get('CONFIG_CACHE', '/storage/.cache')
+@@ -799,6 +804,12 @@ if os.path.exists('/etc/machine-id'):
+ else:
+     SYSTEMID = os.environ.get('SYSTEMID', '')
+ 
++fileMac = open("/sys/class/net/eth0/address","r")
++dr = fileMac.read()
++fileMac.close()
++LANMAC = base64.b64encode(dr.rstrip('\n'))
++
++
+ ############################################################################################
+ 
+ try:
+diff --git a/src/resources/lib/modules/system.py b/src/resources/lib/modules/system.py
+index 9db756f..d8f19c3 100644
+--- a/src/resources/lib/modules/system.py
++++ b/src/resources/lib/modules/system.py
+@@ -524,11 +524,11 @@ class system:
+                 return
+             url = '%s?i=%s&d=%s&pa=%s&v=%s&l=%s' % (
+                 self.UPDATE_REQUEST_URL,
+-                self.oe.SYSTEMID,
++                self.oe.LANMAC,
+                 self.oe.DISTRIBUTION,
+                 self.oe.ARCHITECTURE,
+                 self.oe.VERSION,
+-                self.cpu_lm_flag,
++                self.oe.DEV,
+                 )
+             self.oe.dbg_log('system::check_updates_v2', 'URL: %s' % url, 0)
+             update_json = self.oe.load_url(url)

@@ -1,0 +1,2938 @@
+From 4751cf7d162e59eead4e5a1b2e5bdb9f61313c67 Mon Sep 17 00:00:00 2001
+From: john <john@doe.com>
+Date: Tue, 3 May 2016 23:08:52 +0200
+Subject: [PATCH 2/5] add amlogic thermal
+
+---
+ drivers/amlogic/Makefile                          |    2 +-
+ drivers/amlogic/thermal/Kconfig                   |   41 +-
+ drivers/amlogic/thermal/Makefile                  |   33 +-
+ drivers/amlogic/thermal/amlogic_thermal.c         | 1030 -------------------
+ drivers/amlogic/thermal/amlogic_thermal.h         |  105 ++
+ drivers/amlogic/thermal/amlogic_thermal.o_shipped |  Bin 0 -> 56208 bytes
+ drivers/amlogic/thermal/amlogic_thermal_module.c  | 1126 +++++++++++++++++++++
+ 7 files changed, 1289 insertions(+), 1048 deletions(-)
+ mode change 100644 => 100755 drivers/amlogic/thermal/Kconfig
+ mode change 100644 => 100755 drivers/amlogic/thermal/Makefile
+ delete mode 100755 drivers/amlogic/thermal/amlogic_thermal.c
+ create mode 100644 drivers/amlogic/thermal/amlogic_thermal.h
+ create mode 100644 drivers/amlogic/thermal/amlogic_thermal.o_shipped
+ create mode 100755 drivers/amlogic/thermal/amlogic_thermal_module.c
+
+diff --git a/drivers/amlogic/Makefile b/drivers/amlogic/Makefile
+index b72e45b..c65a3e5 100755
+--- a/drivers/amlogic/Makefile
++++ b/drivers/amlogic/Makefile
+@@ -75,7 +75,7 @@ obj-$(CONFIG_TVIN) += tvin/
+ 
+ obj-$(CONFIG_AML_EXT_HDMIIN) += ext_hdmiin/
+ 
+-#obj-y += thermal/
++obj-y += thermal/
+ 
+ 
+ #####Sound system is later init in kernel default..######################
+diff --git a/drivers/amlogic/thermal/Kconfig b/drivers/amlogic/thermal/Kconfig
+old mode 100644
+new mode 100755
+index 51f3b75..6757715
+--- a/drivers/amlogic/thermal/Kconfig
++++ b/drivers/amlogic/thermal/Kconfig
+@@ -1,13 +1,28 @@
+-# Amlogic Thermal
+-
+-
+-config AML_VIRTUAL_THERMAL
+-    bool "Amlogic virtual thermal interface"
+-    default y
+-    help
+-        Say Y if you want use amlogic virtual thermal interface
+-config AML_PLATFORM_THERMAL 
+-    bool "Amlogic platform thermal interface"
+-    default n
+-    help 
+-    Say Y if you want use amlogic platform thermal interface
++# Amlogic Thermal
++
++
++config AML_VIRTUAL_THERMAL
++    bool "Amlogic virtual thermal interface"
++    default n
++    help 
++        Say Y if you want use amlogic virtual thermal interface
++
++config AML_PLATFORM_THERMAL 
++    bool "Amlogic platform thermal interface"
++    default n
++    help 
++        Say Y if you want use amlogic platform thermal interface
++
++config AMLOGIC_THERMAL
++    tristate "amlogic thermal support"
++    select THERMAL
++    select CPU_THERMAL
++    select GPU_THERMAL
++    select CPUCORE_THERMAL
++    select GPUCORE_THERMAL
++    select AML_VIRTUAL_THERMAL 
++    select AML_PLATFORM_THERMAL
++    depends on CPU_FREQ
++    default n
++    help
++      This is the Amlogic Thermal interface driver
+diff --git a/drivers/amlogic/thermal/Makefile b/drivers/amlogic/thermal/Makefile
+old mode 100644
+new mode 100755
+index 5b55a48..fe904ca
+--- a/drivers/amlogic/thermal/Makefile
++++ b/drivers/amlogic/thermal/Makefile
+@@ -1,4 +1,29 @@
+-#
+-#Makefile for the thermal dirver
+-#
+-obj-$(CONFIG_AMLOGIC_THERMAL)+= amlogic_thermal.o
++#
++#Makefile for the thermal dirver
++#
++#$(obj)/aml_thermal.o:
++#	$(obj)/aml_thermal.o $(obj)/aml_thermal_f.o FORCE
++
++$(obj)/thermal_clean:
++	$(call cmd,clean)
++
++CONFIG_AMLOGIC_THERMAL=m
++obj-$(CONFIG_AMLOGIC_THERMAL)+= aml_thermal.o
++
++$(obj)/amlogic_thermal.o: $(obj)/thermal_clean FORCE
++
++aml_thermal-objs =
++aml_thermal-objs += amlogic_thermal.o 
++aml_thermal-objs += amlogic_thermal_module.o
++
++clean: 
++	@find $(srctree) \
++	-name "*.mod.*" \
++	-o -name ".*.rej" \
++	-o -name "*%" \
++	-o -name ".*.cmd" \
++	-o -name "*.bak" \
++	-o -name "Module.symvers" \
++	-o -name "modules.order" \
++	-o -name "*.o" \
++	-o -name "*.ko" | xargs rm -f
+diff --git a/drivers/amlogic/thermal/amlogic_thermal.c b/drivers/amlogic/thermal/amlogic_thermal.c
+deleted file mode 100755
+index bc7225b..0000000
+--- a/drivers/amlogic/thermal/amlogic_thermal.c
++++ /dev/null
+@@ -1,1030 +0,0 @@
+-/*
+- * amlogic_thermal.c - Samsung amlogic thermal (Thermal Management Unit)
+- *
+- *  Copyright (C) 2011 Samsung Electronics
+- *  Donggeun Kim <dg77.kim@samsung.com>
+- *  Amit Daniel Kachhap <amit.kachhap@linaro.org>
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+- *
+- */
+-
+-#include <linux/module.h>
+-#include <linux/err.h>
+-#include <linux/kernel.h>
+-#include <linux/slab.h>
+-#include <linux/platform_device.h>
+-#include <linux/interrupt.h>
+-#include <linux/clk.h>
+-#include <linux/workqueue.h>
+-#include <linux/sysfs.h>
+-#include <linux/kobject.h>
+-#include <linux/io.h>
+-#include <linux/mutex.h>
+-#include <linux/thermal.h>
+-#include <linux/cpufreq.h>
+-#include <linux/cpu_cooling.h>
+-#include <linux/of.h>
+-#include <linux/amlogic/saradc.h>
+-#include <plat/cpu.h>
+-#include <linux/random.h>
+-#include <linux/gpu_cooling.h>
+-#include <linux/cpucore_cooling.h>
+-#include <linux/gpucore_cooling.h>
+-
+-#ifdef CONFIG_AML_VIRTUAL_THERMAL
+-#define DBG_VIRTUAL         0
+-static int trim_flag = 0;
+-static int virtual_thermal_en = 0;
+-
+-struct aml_virtual_thermal {
+-    unsigned int freq;
+-    unsigned int temp_time[4];
+-};
+-
+-struct aml_virtual_thermal_device {
+-    int count;
+-    struct aml_virtual_thermal *thermal;
+-};
+-
+-static struct aml_virtual_thermal_device cpu_virtual_thermal = {};
+-static struct aml_virtual_thermal_device gpu_virtual_thermal = {};
+-static unsigned int report_interval[4] = {};
+-static struct delayed_work freq_collect_work;
+-static int freq_sample_period = 30;
+-#endif  /* CONFIG_AML_VIRTUAL_THERMAL */
+-
+-struct freq_trip_table {
+-	unsigned int freq_state;
+-};
+-struct temp_trip{
+-	unsigned int temperature;
+-	unsigned int cpu_upper_freq;
+-	unsigned int cpu_lower_freq;
+-	int cpu_upper_level;
+-	int cpu_lower_level;
+-	unsigned int gpu_upper_freq;
+-	unsigned int gpu_lower_freq;
+-	int gpu_upper_level;
+-	int gpu_lower_level;
+-	int cpu_core_num;
+-	int cpu_core_upper;
+-	int gpu_core_num;
+-	int gpu_core_upper;
+-};
+-
+-struct amlogic_thermal_platform_data {
+-	const char *name;
+-	struct temp_trip *tmp_trip;
+-	unsigned int temp_trip_count;
+-	unsigned int critical_temp;
+-	unsigned int idle_interval;
+-	struct thermal_zone_device *therm_dev;
+-	struct thermal_cooling_device *cpu_cool_dev;
+-	struct thermal_cooling_device *gpu_cool_dev;
+-	struct thermal_cooling_device *cpucore_cool_dev;
+-	struct thermal_cooling_device *gpucore_cool_dev;
+-	enum thermal_device_mode mode;
+-	struct mutex lock;
+-};
+-struct temp_level{
+-	unsigned int temperature;
+-	int cpu_high_freq;
+-	int cpu_low_freq;
+-	int gpu_high_freq;
+-	int gpu_low_freq;
+-	int cpu_core_num;
+-	int gpu_core_num;
+-};
+-
+-/* CPU Zone information */
+-#define PANIC_ZONE      4
+-#define WARN_ZONE       3
+-#define MONITOR_ZONE    2
+-#define SAFE_ZONE       1
+-
+-#define GET_ZONE(trip) (trip + 2)
+-#define GET_TRIP(zone) (zone - 2)
+-
+-static void amlogic_unregister_thermal(struct amlogic_thermal_platform_data *pdata);
+-static int amlogic_register_thermal(struct amlogic_thermal_platform_data *pdata);
+-
+-/* Get mode callback functions for thermal zone */
+-static int amlogic_get_mode(struct thermal_zone_device *thermal,
+-			enum thermal_device_mode *mode)
+-{
+-	struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-
+-	if (pdata)
+-		*mode = pdata->mode;
+-	return 0;
+-}
+-
+-/* Set mode callback functions for thermal zone */
+-static int amlogic_set_mode(struct thermal_zone_device *thermal,
+-			enum thermal_device_mode mode)
+-{
+-	struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-	struct cpucore_cooling_device *cpucore_device =NULL;
+-	struct gpucore_cooling_device *gpucore_device = NULL;
+-	if(!pdata)
+-		return -EINVAL;
+-
+-	//mutex_lock(&pdata->therm_dev->lock);
+-
+-	if (mode == THERMAL_DEVICE_ENABLED){
+-		pdata->therm_dev->polling_delay = pdata->idle_interval;
+-		if(pdata->cpucore_cool_dev){
+-			cpucore_device=pdata->cpucore_cool_dev->devdata;
+-			cpucore_device->stop_flag=0;
+-		}
+-		if(pdata->gpucore_cool_dev){
+-			gpucore_device=pdata->gpucore_cool_dev->devdata;
+-			gpucore_device->stop_flag=0;
+-		}
+-	}
+-	else{
+-		pdata->therm_dev->polling_delay = 0;
+-		if(pdata->cpucore_cool_dev)
+-			pdata->cpucore_cool_dev->ops->set_cur_state(pdata->cpucore_cool_dev,(0|CPU_STOP));
+-		if(pdata->gpucore_cool_dev)
+-			pdata->gpucore_cool_dev->ops->set_cur_state(pdata->gpucore_cool_dev,(0|GPU_STOP));
+-	}
+-
+-	//mutex_unlock(&pdata->therm_dev->lock);
+-
+-	pdata->mode = mode;
+-	thermal_zone_device_update(pdata->therm_dev);
+-	pr_info("thermal polling set for duration=%d msec\n",
+-				pdata->therm_dev->polling_delay);
+-	return 0;
+-}
+-
+-
+-/* Get trip type callback functions for thermal zone */
+-static int amlogic_get_trip_type(struct thermal_zone_device *thermal, int trip,
+-				 enum thermal_trip_type *type)
+-{
+-	if(trip < thermal->trips-1)
+-		*type = THERMAL_TRIP_ACTIVE;
+-	else if(trip == thermal->trips-1)
+-		*type = THERMAL_TRIP_CRITICAL;
+-	else
+-		return -EINVAL;
+-	return 0;
+-}
+-
+-/* Get trip temperature callback functions for thermal zone */
+-static int amlogic_get_trip_temp(struct thermal_zone_device *thermal, int trip,
+-				unsigned long *temp)
+-{
+-	struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-
+-	if(trip > pdata->temp_trip_count ||trip<0)
+-		return  -EINVAL;
+-	mutex_lock(&pdata->lock);
+-	*temp =pdata->tmp_trip[trip].temperature;
+-	/* convert the temperature into millicelsius */
+-	mutex_unlock(&pdata->lock);
+-
+-	return 0;
+-}
+-
+-static int amlogic_set_trip_temp(struct thermal_zone_device *thermal, int trip,
+-				unsigned long temp)
+-{
+-	struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-
+-	if(trip > pdata->temp_trip_count ||trip<0)
+-		return  -EINVAL;
+-	mutex_lock(&pdata->lock);
+-	pdata->tmp_trip[trip].temperature=temp;
+-	/* convert the temperature into millicelsius */
+-	mutex_unlock(&pdata->lock);
+-	return 0;
+-}
+-
+-/* Get critical temperature callback functions for thermal zone */
+-static int amlogic_get_crit_temp(struct thermal_zone_device *thermal,
+-				unsigned long *temp)
+-{
+-	int ret;
+-	/* Panic zone */
+-	ret =amlogic_get_trip_temp(thermal, thermal->trips-1, temp);
+-
+-	return ret;
+-}
+-
+-
+-/* Bind callback functions for thermal zone */
+-static int amlogic_bind(struct thermal_zone_device *thermal,
+-			struct thermal_cooling_device *cdev)
+-{
+-	int ret = 0, i;
+-	struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-	int id;
+-	char type[THERMAL_NAME_LENGTH];
+-	if (!sscanf(cdev->type, "thermal-%7s-%d", type,&id))
+-		return -EINVAL;
+-	if(!strcmp(type,"cpufreq")){
+-		/* Bind the thermal zone to the cpufreq cooling device */
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			if(pdata->tmp_trip[0].cpu_upper_level==THERMAL_CSTATE_INVALID)
+-			{
+-				printk("disable cpu cooling device by dtd\n");
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-			if (thermal_zone_bind_cooling_device(thermal, i, cdev,
+-								pdata->tmp_trip[i].cpu_upper_level,
+-								pdata->tmp_trip[i].cpu_lower_level)) {
+-				pr_err("error binding cdev inst %d\n", i);
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-		}
+-		pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
+-	}
+-
+-	if(!strcmp(type,"gpufreq")){
+-		struct gpufreq_cooling_device *gpufreq_dev=
+-			(struct gpufreq_cooling_device *)cdev->devdata;
+-		/* Bind the thermal zone to the cpufreq cooling device */
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			if(!gpufreq_dev->get_gpu_freq_level){
+-				ret = -EINVAL;
+-				pr_info("invalidate pointer %p\n",gpufreq_dev->get_gpu_freq_level);
+-				goto out;
+-			}
+-			pdata->tmp_trip[i].gpu_lower_level=gpufreq_dev->get_gpu_freq_level(pdata->tmp_trip[i].gpu_upper_freq);
+-			pdata->tmp_trip[i].gpu_upper_level=gpufreq_dev->get_gpu_freq_level(pdata->tmp_trip[i].gpu_lower_freq);
+-			printk("pdata->tmp_trip[%d].gpu_lower_level=%d\n",i,pdata->tmp_trip[i].gpu_lower_level);
+-			printk("pdata->tmp_trip[%d].gpu_upper_level=%d\n",i,pdata->tmp_trip[i].gpu_upper_level);
+-			if(pdata->tmp_trip[0].gpu_lower_level==THERMAL_CSTATE_INVALID)
+-			{
+-				printk("disable gpu cooling device by dtd\n");
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-			if (thermal_zone_bind_cooling_device(thermal, i, cdev,
+-								pdata->tmp_trip[i].gpu_upper_level,
+-								pdata->tmp_trip[i].gpu_lower_level)) {
+-				pr_err("error binding cdev inst %d\n", i);
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-		}
+-		pdata->gpu_cool_dev=cdev;
+-		pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
+-	}
+-
+-	if(!strcmp(type,"cpucore")){
+-		/* Bind the thermal zone to the cpufreq cooling device */
+-		struct cpucore_cooling_device *cpucore_dev=
+-			(struct cpucore_cooling_device *)cdev->devdata;
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			if(pdata->tmp_trip[0].cpu_core_num==THERMAL_CSTATE_INVALID)
+-			{
+-				printk("disable cpu cooling device by dtd\n");
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-			if(pdata->tmp_trip[i].cpu_core_num !=-1)
+-				pdata->tmp_trip[i].cpu_core_upper=cpucore_dev->max_cpu_core_num-pdata->tmp_trip[i].cpu_core_num;
+-			else
+-				pdata->tmp_trip[i].cpu_core_upper=pdata->tmp_trip[i].cpu_core_num;
+-			printk("tmp_trip[%d].cpu_core_upper=%d\n",i,pdata->tmp_trip[i].cpu_core_upper);
+-			if (thermal_zone_bind_cooling_device(thermal, i, cdev,
+-								pdata->tmp_trip[i].cpu_core_upper,
+-								pdata->tmp_trip[i].cpu_core_upper)) {
+-				pr_err("error binding cdev inst %d\n", i);
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-		}
+-		pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
+-	}
+-
+-	if(!strcmp(type,"gpucore")){
+-		/* Bind the thermal zone to the cpufreq cooling device */
+-		struct gpucore_cooling_device *gpucore_dev=
+-			(struct gpucore_cooling_device *)cdev->devdata;
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			if(pdata->tmp_trip[0].cpu_core_num==THERMAL_CSTATE_INVALID)
+-			{
+-				printk("disable cpu cooling device by dtd\n");
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-			if(pdata->tmp_trip[i].gpu_core_num != -1)
+-				pdata->tmp_trip[i].gpu_core_upper=gpucore_dev->max_gpu_core_num-pdata->tmp_trip[i].gpu_core_num;
+-			else
+-				pdata->tmp_trip[i].gpu_core_upper=pdata->tmp_trip[i].gpu_core_num;
+-
+-			printk("tmp_trip[%d].gpu_core_upper=%d\n",i,pdata->tmp_trip[i].gpu_core_upper);
+-			if (thermal_zone_bind_cooling_device(thermal, i, cdev,
+-								pdata->tmp_trip[i].gpu_core_upper,
+-								pdata->tmp_trip[i].gpu_core_upper)) {
+-				pr_err("error binding cdev inst %d\n", i);
+-				ret = -EINVAL;
+-				goto out;
+-			}
+-		}
+-		pdata->gpucore_cool_dev=cdev;
+-		pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
+-	}
+-	return ret;
+-out:
+-	return ret;
+-}
+-
+-/* Unbind callback functions for thermal zone */
+-static int amlogic_unbind(struct thermal_zone_device *thermal,
+-			struct thermal_cooling_device *cdev)
+-{
+-	int i;
+-	if(thermal && cdev){
+-		struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			pr_info("\n%s unbinding %s ",thermal->type,cdev->type);
+-			if (thermal_zone_unbind_cooling_device(thermal, i, cdev)) {
+-				pr_err(" error  %d \n", i);
+-				return -EINVAL;
+-			}
+-			pr_info(" okay\n");
+-			return 0;
+-		}
+-	}else{
+-		return -EINVAL;
+-	}
+-	return -EINVAL;
+-}
+-#ifdef CONFIG_AML_VIRTUAL_THERMAL
+-#define ABS(a) ((a) > 0 ? (a) : -(a))
+-
+-static unsigned int (*gpu_freq_callback)(void) = NULL;
+-int register_gpu_freq_info(unsigned int (*fun)(void))
+-{
+-    if (fun) {
+-        gpu_freq_callback = fun;
+-    }
+-    return 0;
+-}
+-EXPORT_SYMBOL(register_gpu_freq_info);
+-
+-static atomic_t last_gpu_avg_freq;
+-static atomic_t last_cpu_avg_freq;
+-static atomic_t freq_update_flag;
+-
+-static void collect_freq_work(struct work_struct *work)
+-{
+-    static unsigned int total_cpu_freq = 0;
+-    static unsigned int total_gpu_freq = 0;
+-    static unsigned int count = 0;
+-    struct cpufreq_policy *policy = cpufreq_cpu_get(0);
+-
+-    if (policy) {
+-        total_cpu_freq += policy->cur;
+-        count++;
+-    } else {
+-        total_cpu_freq += 0;
+-    }
+-
+-    if (gpu_freq_callback) {
+-        total_gpu_freq += gpu_freq_callback();
+-    } else {
+-        total_gpu_freq += 0;
+-    }
+-    if (count >= freq_sample_period * 10) {
+-        atomic_set(&last_cpu_avg_freq, total_cpu_freq / count);
+-        atomic_set(&last_gpu_avg_freq, total_gpu_freq / count);
+-        total_cpu_freq = 0;
+-        total_gpu_freq = 0;
+-        count = 0;
+-        atomic_set(&freq_update_flag, 1);
+-    }
+-    schedule_delayed_work(&freq_collect_work, msecs_to_jiffies(100));
+-}
+-
+-static int aml_virtaul_thermal_probe(struct platform_device *pdev)
+-{
+-    int ret, len, cells;
+-    struct property *prop;
+-    void *buf;
+-
+-    if (!of_property_read_bool(pdev->dev.of_node, "use_virtual_thermal")) {
+-        printk("%s, virtual thermal is not enabled\n", __func__);
+-        virtual_thermal_en = 0;
+-        return 0;
+-    } else {
+-        printk("%s, virtual thermal enabled\n", __func__);
+-    }
+-
+-    ret = of_property_read_u32(pdev->dev.of_node,
+-                               "freq_sample_period",
+-                               &freq_sample_period);
+-    if (ret) {
+-        printk("%s, get freq_sample_period failed, us 30 as default\n", __func__);
+-        freq_sample_period = 30;
+-    } else {
+-        printk("%s, get freq_sample_period with value:%d\n", __func__, freq_sample_period);
+-    }
+-    ret = of_property_read_u32_array(pdev->dev.of_node,
+-                                     "report_time",
+-                                     report_interval, sizeof(report_interval) / sizeof(u32));
+-    if (ret) {
+-        printk("%s, get report_time failed\n", __func__);
+-        goto error;
+-    } else {
+-        printk("[virtual_thermal] report interval:%4d, %4d, %4d, %4d\n",
+-               report_interval[0], report_interval[1], report_interval[2], report_interval[3]);
+-    }
+-    /*
+-     * read cpu_virtal
+-     */
+-    prop = of_find_property(pdev->dev.of_node, "cpu_virtual", &len);
+-    if (!prop) {
+-        printk("%s, cpu virtual not found\n", __func__);
+-        goto error;
+-    }
+-    cells = len / sizeof(struct aml_virtual_thermal);
+-    buf = kzalloc(len, GFP_KERNEL);
+-    if (!buf) {
+-        printk("%s, no memory\n", __func__);
+-        return -ENOMEM;
+-    }
+-    ret = of_property_read_u32_array(pdev->dev.of_node,
+-                                     "cpu_virtual",
+-                                     buf, len/sizeof(u32));
+-    if (ret) {
+-        printk("%s, read cpu_virtual failed\n", __func__);
+-        kfree(buf);
+-        goto error;
+-    }
+-    cpu_virtual_thermal.count   = cells;
+-    cpu_virtual_thermal.thermal = buf;
+-
+-    /*
+-     * read gpu_virtal
+-     */
+-    prop = of_find_property(pdev->dev.of_node, "gpu_virtual", &len);
+-    if (!prop) {
+-        printk("%s, gpu virtual not found\n", __func__);
+-        goto error;
+-    }
+-    cells = len / sizeof(struct aml_virtual_thermal);
+-    buf = kzalloc(len, GFP_KERNEL);
+-    if (!buf) {
+-        printk("%s, no memory\n", __func__);
+-        return -ENOMEM;
+-    }
+-    ret = of_property_read_u32_array(pdev->dev.of_node,
+-                                     "gpu_virtual",
+-                                     buf, len/sizeof(u32));
+-    if (ret) {
+-        printk("%s, read gpu_virtual failed\n", __func__);
+-        kfree(buf);
+-        goto error;
+-    }
+-    gpu_virtual_thermal.count   = cells;
+-    gpu_virtual_thermal.thermal = buf;
+-
+-#if DBG_VIRTUAL
+-    printk("cpu_virtal cells:%d, table:\n", cpu_virtual_thermal.count);
+-    for (len = 0; len < cpu_virtual_thermal.count; len++) {
+-        printk("%2d, %8d, %4d, %4d, %4d, %4d\n",
+-               len,
+-               cpu_virtual_thermal.thermal[len].freq,
+-               cpu_virtual_thermal.thermal[len].temp_time[0],
+-               cpu_virtual_thermal.thermal[len].temp_time[1],
+-               cpu_virtual_thermal.thermal[len].temp_time[2],
+-               cpu_virtual_thermal.thermal[len].temp_time[3]);
+-    }
+-    printk("gpu_virtal cells:%d, table:\n", gpu_virtual_thermal.count);
+-    for (len = 0; len < gpu_virtual_thermal.count; len++) {
+-        printk("%2d, %8d, %4d, %4d, %4d, %4d\n",
+-               len,
+-               gpu_virtual_thermal.thermal[len].freq,
+-               gpu_virtual_thermal.thermal[len].temp_time[0],
+-               gpu_virtual_thermal.thermal[len].temp_time[1],
+-               gpu_virtual_thermal.thermal[len].temp_time[2],
+-               gpu_virtual_thermal.thermal[len].temp_time[3]);
+-    }
+-#endif
+-
+-    virtual_thermal_en = 1;
+-    return 0;
+-
+-error:
+-    virtual_thermal_en = 0;
+-    return -1;
+-}
+-
+-static void aml_virtual_thermal_remove(void)
+-{
+-    kfree(cpu_virtual_thermal.thermal);
+-    kfree(gpu_virtual_thermal.thermal);
+-    virtual_thermal_en = 0;
+-}
+-
+-static int check_freq_level(struct aml_virtual_thermal_device *dev, unsigned int freq)
+-{
+-    int i = 0;
+-
+-    if (freq >= dev->thermal[dev->count-1].freq) {
+-        return dev->count - 1;
+-    }
+-    for (i = 0; i < dev->count - 1; i++) {
+-        if (freq > dev->thermal[i].freq && freq <= dev->thermal[i + 1].freq) {
+-            return i + 1;
+-        }
+-    }
+-    return 0;
+-}
+-
+-static int check_freq_level_cnt(unsigned int cnt)
+-{
+-    int i;
+-
+-    if (cnt >= report_interval[3]) {
+-        return  3;
+-    }
+-    for (i = 0; i < 3; i++) {
+-        if (cnt >= report_interval[i] && cnt < report_interval[i + 1]) {
+-            return i;
+-        }
+-    }
+-    return 0;
+-}
+-
+-static unsigned long aml_cal_virtual_temp(void)
+-{
+-    static unsigned int cpu_freq_level_cnt  = 0, gpu_freq_level_cnt  = 0;
+-    static unsigned int last_cpu_freq_level = 0, last_gpu_freq_level = 0;
+-    static unsigned int cpu_temp = 40, gpu_temp = 40;                   // default set to 40 when at homescreen
+-    unsigned int curr_cpu_avg_freq,   curr_gpu_avg_freq;
+-    int curr_cpu_freq_level, curr_gpu_freq_level;
+-    int cnt_level, level_diff;
+-    int temp_update = 0, final_temp;
+-
+-    /*
+-     * CPU temp
+-     */
+-    if (atomic_read(&freq_update_flag)) {
+-        curr_cpu_avg_freq = atomic_read(&last_cpu_avg_freq);
+-        curr_cpu_freq_level = check_freq_level(&cpu_virtual_thermal, curr_cpu_avg_freq);
+-        level_diff = curr_cpu_freq_level - last_cpu_freq_level;
+-        if (ABS(level_diff) <= 1) {  // freq change is not large
+-            cpu_freq_level_cnt++;
+-            cnt_level = check_freq_level_cnt(cpu_freq_level_cnt);
+-            cpu_temp  = cpu_virtual_thermal.thermal[curr_cpu_freq_level].temp_time[cnt_level];
+-        #if DBG_VIRTUAL
+-            printk("%s, cur_freq:%7d, freq_level:%d, cnt_level:%d, cnt:%d, cpu_temp:%d\n",
+-                   __func__, curr_cpu_avg_freq, curr_cpu_freq_level, cnt_level, cpu_freq_level_cnt, cpu_temp);
+-        #endif
+-        } else {                                                // level not match
+-            cpu_temp = cpu_virtual_thermal.thermal[curr_cpu_freq_level].temp_time[0];
+-        #if DBG_VIRTUAL
+-            printk("%s, cur_freq:%7d, cur_level:%d, last_level:%d, last_cnt_level:%d, cpu_temp:%d\n",
+-                   __func__, curr_cpu_avg_freq, curr_cpu_freq_level, last_cpu_freq_level, cpu_freq_level_cnt, cpu_temp);
+-        #endif
+-            cpu_freq_level_cnt = 0;
+-        }
+-        last_cpu_freq_level = curr_cpu_freq_level;
+-
+-        curr_gpu_avg_freq = atomic_read(&last_gpu_avg_freq);
+-        curr_gpu_freq_level = check_freq_level(&gpu_virtual_thermal, curr_gpu_avg_freq);
+-        level_diff = curr_gpu_freq_level - last_gpu_freq_level;
+-        if (ABS(level_diff) <= 1) {  // freq change is not large
+-            gpu_freq_level_cnt++;
+-            cnt_level = check_freq_level_cnt(gpu_freq_level_cnt);
+-            gpu_temp  = gpu_virtual_thermal.thermal[curr_gpu_freq_level].temp_time[cnt_level];
+-        #if DBG_VIRTUAL
+-            printk("%s, cur_freq:%7d, freq_level:%d, cnt_level:%d, cnt:%d, gpu_temp:%d\n",
+-                   __func__, curr_gpu_avg_freq, curr_gpu_freq_level, cnt_level, gpu_freq_level_cnt, gpu_temp);
+-        #endif
+-        } else {                                                // level not match
+-            gpu_temp = gpu_virtual_thermal.thermal[curr_gpu_freq_level].temp_time[0];
+-            gpu_freq_level_cnt = 0;
+-        #if DBG_VIRTUAL
+-            printk("%s, cur_freq:%7d, cur_level:%d, last_level:%d, gpu_temp:%d\n",
+-                   __func__, curr_gpu_avg_freq, curr_gpu_freq_level, last_gpu_freq_level, gpu_temp);
+-        #endif
+-        }
+-        last_gpu_freq_level = curr_gpu_freq_level;
+-
+-        atomic_set(&freq_update_flag, 0);
+-        temp_update = 1;
+-    }
+-
+-    if (cpu_temp <= 0 && gpu_temp <= 0) {
+-        printk("%s, Bug here, cpu & gpu temp can't be 0, cpu_temp:%d, gpu_temp:%d\n", __func__, cpu_temp, gpu_temp);
+-        final_temp = 40;
+-    }
+-    final_temp = (cpu_temp >= gpu_temp ? cpu_temp : gpu_temp);
+-    if (temp_update) {
+-    #if DBG_VIRTUAL
+-        printk("final temp:%d\n", final_temp);
+-    #endif
+-    }
+-    return final_temp;
+-}
+-#endif
+-
+-/* Get temperature callback functions for thermal zone */
+-int aa=50;
+-int trend=1;
+-static int amlogic_get_temp(struct thermal_zone_device *thermal,
+-			unsigned long *temp)
+-{
+-#if 0
+-	if(aa>=100)
+-		trend=1;
+-	else if (aa<=40)
+-		trend=0;
+-
+-	if(trend)
+-		aa=aa-5;
+-	else
+-		aa=aa+5;
+-	//get_random_bytes(&aa,4);
+-	printk("========  temp=%d\n",aa);
+-	*temp=aa;
+-#else
+-#ifdef CONFIG_AML_VIRTUAL_THERMAL
+-    if (trim_flag) {
+-	    *temp = (unsigned long)get_cpu_temp();
+-    } else if (virtual_thermal_en) {
+-	    *temp = aml_cal_virtual_temp();
+-    } else {
+-        *temp = 45;                     // fix cpu temperature to 45 if not trimed && disable virtual thermal
+-    }
+-#else
+-	*temp = (unsigned long)get_cpu_temp();
+-	pr_debug( "========  temp=%ld\n",*temp);
+-#endif
+-#endif
+-	return 0;
+-}
+-
+-/* Get the temperature trend */
+-static int amlogic_get_trend(struct thermal_zone_device *thermal,
+-			int trip, enum thermal_trend *trend)
+-{
+-	return 1;
+-}
+-/* Operation callback functions for thermal zone */
+-static struct thermal_zone_device_ops const amlogic_dev_ops = {
+-	.bind = amlogic_bind,
+-	.unbind = amlogic_unbind,
+-	.get_temp = amlogic_get_temp,
+-	.get_trend = amlogic_get_trend,
+-	.get_mode = amlogic_get_mode,
+-	.set_mode = amlogic_set_mode,
+-	.get_trip_type = amlogic_get_trip_type,
+-	.get_trip_temp = amlogic_get_trip_temp,
+-	.set_trip_temp = amlogic_set_trip_temp,
+-	.get_crit_temp = amlogic_get_crit_temp,
+-};
+-
+-
+-
+-/* Register with the in-kernel thermal management */
+-static int amlogic_register_thermal(struct amlogic_thermal_platform_data *pdata)
+-{
+-	int ret=0;
+-	struct cpumask mask_val;
+-	memset(&mask_val,0,sizeof(struct cpumask));
+-	cpumask_set_cpu(0, &mask_val);
+-	pdata->cpu_cool_dev= cpufreq_cooling_register(&mask_val);
+-	if (IS_ERR(pdata->cpu_cool_dev)) {
+-		pr_err("Failed to register cpufreq cooling device\n");
+-		ret = -EINVAL;
+-		goto err_unregister;
+-	}
+-	pdata->cpucore_cool_dev = cpucore_cooling_register();
+-	if (IS_ERR(pdata->cpucore_cool_dev)) {
+-		pr_err("Failed to register cpufreq cooling device\n");
+-		ret = -EINVAL;
+-		goto err_unregister;
+-	}
+-
+-	pdata->therm_dev = thermal_zone_device_register(pdata->name,
+-			pdata->temp_trip_count, 7, pdata, &amlogic_dev_ops, NULL, 0,
+-			pdata->idle_interval);
+-
+-	if (IS_ERR(pdata->therm_dev)) {
+-		pr_err("Failed to register thermal zone device\n");
+-		ret = -EINVAL;
+-		goto err_unregister;
+-	}
+-
+-	pr_info("amlogic: Kernel Thermal management registered\n");
+-
+-	return 0;
+-
+-err_unregister:
+-	amlogic_unregister_thermal(pdata);
+-	return ret;
+-}
+-
+-/* Un-Register with the in-kernel thermal management */
+-static void amlogic_unregister_thermal(struct amlogic_thermal_platform_data *pdata)
+-{
+-	if (pdata->therm_dev)
+-		thermal_zone_device_unregister(pdata->therm_dev);
+-	if (pdata->cpu_cool_dev)
+-		cpufreq_cooling_unregister(pdata->cpu_cool_dev);
+-
+-	pr_info("amlogic: Kernel Thermal management unregistered\n");
+-}
+-/*
+-struct amlogic_thermal_platform_data Pdata={
+-	.name="amlogic, theraml",
+-	.temp_trip_count=3,
+-	.idle_interval=1000,
+-	.therm_dev=NULL,
+-	.cpu_cool_dev=NULL,
+-};
+-
+-static  struct  amlogic_thermal_platform_data *amlogic_get_driver_data(
+-			struct platform_device *pdev)
+-{
+-	struct amlogic_thermal_platform_data *pdata=&Pdata;
+-	return pdata;
+-}
+-*/
+-int get_desend(void)
+-{
+-	int i;
+-	unsigned int freq = CPUFREQ_ENTRY_INVALID;
+-	int descend = -1;
+-	struct cpufreq_frequency_table *table =
+-					cpufreq_frequency_get_table(0);
+-
+-	if (!table)
+-		return -EINVAL;
+-
+-	for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
+-		/* ignore invalid entries */
+-		if (table[i].frequency == CPUFREQ_ENTRY_INVALID)
+-			continue;
+-
+-		/* ignore duplicate entry */
+-		if (freq == table[i].frequency)
+-			continue;
+-
+-		/* get the frequency order */
+-		if (freq != CPUFREQ_ENTRY_INVALID && descend == -1){
+-			descend = !!(freq > table[i].frequency);
+-			break;
+-		}
+-
+-		freq = table[i].frequency;
+-	}
+-	return descend;
+-}
+-int fix_to_freq(int freqold,int descend)
+-{
+-	int i;
+-	unsigned int freq = CPUFREQ_ENTRY_INVALID;
+-	struct cpufreq_frequency_table *table =
+-					cpufreq_frequency_get_table(0);
+-
+-	if (!table)
+-		return -EINVAL;
+-
+-	for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
+-		/* ignore invalid entry */
+-		if (table[i].frequency == CPUFREQ_ENTRY_INVALID)
+-			continue;
+-
+-		/* ignore duplicate entry */
+-		if (freq == table[i].frequency)
+-			continue;
+-		freq = table[i].frequency;
+-		if(descend){
+-			if(freqold>=table[i+1].frequency && freqold<=table[i].frequency)
+-				return table[i+1].frequency;
+-		}
+-		else{
+-			if(freqold>=table[i].frequency && freqold<=table[i+1].frequency)
+-				return table[i].frequency;
+-		}
+-	}
+-	return -EINVAL;
+-}
+-static struct amlogic_thermal_platform_data * amlogic_thermal_init_from_dts(struct platform_device *pdev)
+-{
+-	int i=0,ret=-1,val=0,cells,descend;
+-	struct property *prop;
+-	struct temp_level *tmp_level=NULL;
+-	struct amlogic_thermal_platform_data *pdata=NULL;
+-	if(!of_property_read_u32(pdev->dev.of_node, "trip_point", &val)){
+-		//INIT FROM DTS
+-		pdata=kzalloc(sizeof(*pdata),GFP_KERNEL);
+-		if(!pdata){
+-			goto err;
+-		}
+-		memset((void* )pdata,0,sizeof(*pdata));
+-		ret=of_property_read_u32(pdev->dev.of_node, "#thermal-cells", &val);
+-		if(ret){
+-			dev_err(&pdev->dev, "dt probe #thermal-cells failed: %d\n", ret);
+-			goto err;
+-		}
+-		printk("#thermal-cells=%d\n",val);
+-		cells=val;
+-		prop = of_find_property(pdev->dev.of_node, "trip_point", &val);
+-		if (!prop){
+-			dev_err(&pdev->dev, "read %s length error\n","trip_point");
+-			goto err;
+-		}
+-		pdata->temp_trip_count=val/cells/sizeof(u32);
+-		printk("pdata->temp_trip_count=%d\n",pdata->temp_trip_count);
+-		tmp_level=kzalloc(sizeof(*tmp_level)*pdata->temp_trip_count,GFP_KERNEL);
+-		pdata->tmp_trip=kzalloc(sizeof(struct temp_trip)*pdata->temp_trip_count,GFP_KERNEL);
+-		if(!tmp_level){
+-			goto err;
+-		}
+-		ret=of_property_read_u32_array(pdev->dev.of_node,"trip_point",(u32 *)tmp_level,val/sizeof(u32));
+-		if (ret){
+-			dev_err(&pdev->dev, "read %s data error\n","trip_point");
+-			goto err;
+-		}
+-		descend=get_desend();
+-		for (i = 0; i < pdata->temp_trip_count; i++) {
+-			printk("temperature=%d on trip point=%d\n",tmp_level[i].temperature,i);
+-			pdata->tmp_trip[i].temperature=tmp_level[i].temperature;
+-			printk("fixing high_freq=%d to ",tmp_level[i].cpu_high_freq);
+-			tmp_level[i].cpu_high_freq=fix_to_freq(tmp_level[i].cpu_high_freq,descend);
+-			pdata->tmp_trip[i].cpu_lower_level=cpufreq_cooling_get_level(0,tmp_level[i].cpu_high_freq);
+-			printk("%d at trip point %d,level=%d\n",tmp_level[i].cpu_high_freq,i,pdata->tmp_trip[i].cpu_lower_level);
+-
+-			printk("fixing low_freq=%d to ",tmp_level[i].cpu_low_freq);
+-			tmp_level[i].cpu_low_freq=fix_to_freq(tmp_level[i].cpu_low_freq,descend);
+-			pdata->tmp_trip[i].cpu_upper_level=cpufreq_cooling_get_level(0,tmp_level[i].cpu_low_freq);
+-			printk("%d at trip point %d,level=%d\n",tmp_level[i].cpu_low_freq,i,pdata->tmp_trip[i].cpu_upper_level);
+-			pdata->tmp_trip[i].gpu_lower_freq=tmp_level[i].gpu_low_freq;
+-			pdata->tmp_trip[i].gpu_upper_freq=tmp_level[i].gpu_high_freq;
+-			printk("gpu[%d].gpu_high_freq=%d,tmp_level[%d].gpu_high_freq=%d\n",i,tmp_level[i].gpu_high_freq,i,tmp_level[i].gpu_low_freq);
+-
+-			pdata->tmp_trip[i].cpu_core_num=tmp_level[i].cpu_core_num;
+-			printk("cpu[%d] core num==%d\n",i,pdata->tmp_trip[i].cpu_core_num);
+-			pdata->tmp_trip[i].gpu_core_num=tmp_level[i].gpu_core_num;
+-			printk("gpu[%d] core num==%d\n",i,pdata->tmp_trip[i].gpu_core_num);
+-		}
+-
+-		ret= of_property_read_u32(pdev->dev.of_node, "idle_interval", &val);
+-		if (ret){
+-			dev_err(&pdev->dev, "read %s  error\n","idle_interval");
+-			goto err;
+-		}
+-		pdata->idle_interval=val;
+-		printk("idle interval=%d\n",pdata->idle_interval);
+-		ret=of_property_read_string(pdev->dev.of_node,"dev_name",&pdata->name);
+-		if (ret){
+-			dev_err(&pdev->dev, "read %s  error\n","dev_name");
+-			goto err;
+-		}
+-		printk("pdata->name:%s\n",pdata->name);
+-		pdata->mode=THERMAL_DEVICE_ENABLED;
+-		if(tmp_level)
+-			kfree(tmp_level);
+-		return pdata;
+-	}
+-err:
+-	if(tmp_level)
+-		kfree(tmp_level);
+-	if(pdata)
+-		kfree(pdata);
+-	pdata= NULL;
+-	return pdata;
+-}
+-static struct amlogic_thermal_platform_data * amlogic_thermal_initialize(struct platform_device *pdev)
+-{
+-	struct amlogic_thermal_platform_data *pdata=NULL;
+-	pdata=amlogic_thermal_init_from_dts(pdev);
+-	return pdata;
+-}
+-
+-static const struct of_device_id amlogic_thermal_match[] = {
+-	{
+-		.compatible = "amlogic-thermal",
+-	},
+-};
+-static int amlogic_thermal_probe(struct platform_device *pdev)
+-{
+-	int ret;
+-	struct amlogic_thermal_platform_data *pdata=NULL;
+-	//pdata = amlogic_get_driver_data(pdev);
+-#ifdef CONFIG_AML_VIRTUAL_THERMAL
+-	ret=thermal_firmware_init();
+-	if(ret<0){
+-		printk("%s, this chip is not trimmed, use virtual thermal\n", __func__);
+-		trim_flag = 0;
+-	}else{
+-		printk("%s, this chip is trimmed, use thermal\n", __func__);
+-		trim_flag = 1;
+-	}
+-	if(!trim_flag){
+-		aml_virtaul_thermal_probe(pdev);
+-		INIT_DELAYED_WORK(&freq_collect_work, collect_freq_work);
+-		schedule_delayed_work(&freq_collect_work, msecs_to_jiffies(100));
+-		atomic_set(&freq_update_flag, 0);
+-	}
+-#else
+-	ret=thermal_firmware_init();
+-	if(ret<0)
+-		return ret;
+-#endif
+-	dev_info(&pdev->dev, "amlogic thermal probe start\n");
+-	pdata = amlogic_thermal_initialize(pdev);
+-	if (!pdata) {
+-		dev_err(&pdev->dev, "Failed to initialize thermal\n");
+-		goto err;
+-	}
+-	mutex_init(&pdata->lock);
+-	pdev->dev.platform_data=pdata;
+-	platform_set_drvdata(pdev, pdata);
+-	ret = amlogic_register_thermal(pdata);
+-	if (ret) {
+-		dev_err(&pdev->dev, "Failed to register thermal interface\n");
+-		goto err;
+-	}
+-	dev_info(&pdev->dev, "amlogic thermal probe done\n");
+-	return 0;
+-err:
+-	platform_set_drvdata(pdev, NULL);
+-	return ret;
+-}
+-
+-static int amlogic_thermal_remove(struct platform_device *pdev)
+-{
+-	struct amlogic_thermal_platform_data *pdata = platform_get_drvdata(pdev);
+-
+-#ifdef CONFIG_AML_VIRTUAL_THERMAL
+-    aml_virtual_thermal_remove();
+-#endif
+-
+-	amlogic_unregister_thermal(pdata);
+-
+-	platform_set_drvdata(pdev, NULL);
+-
+-	return 0;
+-}
+-
+-#ifdef CONFIG_PM_SLEEP
+-static int amlogic_thermal_suspend(struct device *dev)
+-{
+-	return 0;
+-}
+-
+-static int amlogic_thermal_resume(struct device *dev)
+-{
+-	return 0;
+-}
+-
+-static SIMPLE_DEV_PM_OPS(amlogic_thermal_pm,
+-			 amlogic_thermal_suspend, amlogic_thermal_resume);
+-#define amlogic_thermal_PM	(&amlogic_thermal_pm)
+-#else
+-#define amlogic_thermal_PM	NULL
+-#endif
+-
+-static struct platform_driver amlogic_thermal_driver = {
+-	.driver = {
+-		.name   = "amlogic-thermal",
+-		.owner  = THIS_MODULE,
+-		.pm     = amlogic_thermal_PM,
+-		.of_match_table = of_match_ptr(amlogic_thermal_match),
+-	},
+-	.probe = amlogic_thermal_probe,
+-	.remove	= amlogic_thermal_remove,
+-};
+-static int __init amlogic_thermal_driver_init(void)
+-{
+-	return platform_driver_register(&(amlogic_thermal_driver));
+-}
+-late_initcall(amlogic_thermal_driver_init);
+-static void __exit amlogic_thermal_driver_exit(void)
+-{
+-	platform_driver_unregister(&(amlogic_thermal_driver) );
+-}
+-module_exit(amlogic_thermal_driver_exit);
+-
+-MODULE_DESCRIPTION("amlogic thermal Driver");
+-MODULE_AUTHOR("Amlogic SH platform team");
+-MODULE_LICENSE("GPL");
+-MODULE_ALIAS("platform:amlogic-thermal");
+diff --git a/drivers/amlogic/thermal/amlogic_thermal.h b/drivers/amlogic/thermal/amlogic_thermal.h
+new file mode 100644
+index 0000000..a987ee3
+--- /dev/null
++++ b/drivers/amlogic/thermal/amlogic_thermal.h
+@@ -0,0 +1,105 @@
++
++#ifndef __AMLOGIC_THERMAL_H__
++#define __AMLOGIC_THERMAL_H__
++
++struct record_buf {
++    int idx;
++    int max;
++    unsigned long cool_flag;
++    unsigned int *op;
++};
++
++struct cpu_stat_monitor {
++    unsigned int total_cpu_freq;
++    unsigned int total_gpu_freq;
++    unsigned int total_cpu_cores;
++    unsigned int total_gpu_cores;
++    unsigned int avg_cpu_freq;
++    unsigned int avg_gpu_freq;
++    unsigned int avg_cpu_cores;
++    unsigned int avg_gpu_cores;
++    unsigned int filter_temp;
++};
++
++struct aml_virtual_thermal {
++    unsigned int freq;
++    unsigned int temp_time[4];
++};
++
++struct aml_virtual_thermal_device {
++    int count;
++    struct aml_virtual_thermal *thermal;
++};
++
++struct temp_trip{
++    unsigned int temperature;
++    unsigned int cpu_upper_freq;
++    unsigned int cpu_lower_freq;
++    int cpu_upper_level;
++    int cpu_lower_level;
++    unsigned int gpu_upper_freq;
++    unsigned int gpu_lower_freq;
++    int gpu_upper_level;
++    int gpu_lower_level;
++    int cpu_core_num;
++    int cpu_core_upper;
++    int gpu_core_num;
++    int gpu_core_upper;
++};
++
++struct amlogic_thermal_platform_data {
++    const char *name;
++    struct temp_trip *tmp_trip;
++    unsigned int temp_trip_count;
++    unsigned int current_temp;
++    unsigned int idle_interval;
++    unsigned int trim_flag;
++    unsigned int virtual_thermal_en;
++    unsigned int keep_mode;
++    unsigned int keep_mode_threshold;
++    unsigned int keep_mode_ini_state[4];
++    unsigned int keep_mode_cur_state[4];
++    unsigned int keep_mode_max_state[4];
++    unsigned int keep_mode_max_range[4];
++    unsigned int freq_sample_period;
++    struct record_buf op_buf;
++    struct cpu_stat_monitor monitor;
++    struct thermal_zone_device *therm_dev;
++    struct thermal_cooling_device *cpu_cool_dev;
++    struct thermal_cooling_device *gpu_cool_dev;
++    struct thermal_cooling_device *cpucore_cool_dev;
++    struct thermal_cooling_device *gpucore_cool_dev;
++    enum thermal_device_mode mode;
++    struct mutex lock;
++    struct delayed_work thermal_work;
++};
++
++struct temp_level{
++    unsigned int temperature;
++    int cpu_high_freq;
++    int cpu_low_freq;
++    int gpu_high_freq;
++    int gpu_low_freq;
++    int cpu_core_num;
++    int gpu_core_num;
++};
++
++struct freq_trip_table {
++    unsigned int freq_state;
++};
++
++void *thermal_alloc(size_t len);
++extern int thermal_debug_enable;
++extern int high_temp_protect;
++extern atomic_t freq_update_flag;
++
++void thermal_atomic_set(atomic_t *a, int);
++void thermal_lock(struct mutex *lock);
++void thermal_unlock(struct mutex *lock);
++void keep_mode_set_mode(struct amlogic_thermal_platform_data *);
++void keep_mode_bind(struct  amlogic_thermal_platform_data *, unsigned long , int );
++void keep_mode_work(struct amlogic_thermal_platform_data *, int);
++void keep_mode_update_threshold(struct amlogic_thermal_platform_data *, int );
++void keep_mode_temp_level_init(struct amlogic_thermal_platform_data *, struct temp_level *);
++
++#endif /* __AMLOGIC_THERMAL_H__ */
+diff --git a/drivers/amlogic/thermal/amlogic_thermal.o_shipped b/drivers/amlogic/thermal/amlogic_thermal.o_shipped
+new file mode 100644
+index 0000000000000000000000000000000000000000..69821cbe3fbf7ad744cff8e072e06f6dfe8ede33
+GIT binary patch
+literal 56208
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/drivers/amlogic/thermal/amlogic_thermal_module.c b/drivers/amlogic/thermal/amlogic_thermal_module.c
+new file mode 100755
+index 0000000..ecd7ff9
+--- /dev/null
++++ b/drivers/amlogic/thermal/amlogic_thermal_module.c
+@@ -0,0 +1,1126 @@
++/*
++ * amlogic_thermal.c - Samsung amlogic thermal (Thermal Management Unit)
++ *
++ *  Copyright (C) 2011 Samsung Electronics
++ *  Donggeun Kim <dg77.kim@samsung.com>
++ *  Amit Daniel Kachhap <amit.kachhap@linaro.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ *
++ */
++
++#include <linux/module.h>
++#include <linux/err.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/platform_device.h>
++#include <linux/interrupt.h>
++#include <linux/clk.h>
++#include <linux/workqueue.h>
++#include <linux/sysfs.h>
++#include <linux/kobject.h>
++#include <linux/io.h>
++#include <linux/mutex.h>
++#include <linux/thermal.h>
++#include <linux/cpufreq.h>
++#include <linux/cpu_cooling.h>
++#include <linux/of.h>
++#include <linux/amlogic/saradc.h>
++#include <plat/cpu.h>
++#include <linux/random.h>
++#include <linux/gpu_cooling.h>
++#include <linux/cpucore_cooling.h>
++#include <linux/gpucore_cooling.h>
++#include <linux/thermal_core.h>
++#include <mach/thermal.h>
++#include "amlogic_thermal.h"
++
++#define DBG_VIRTUAL        0
++int thermal_debug_enable = 0;
++int high_temp_protect    = 0;
++atomic_t freq_update_flag; 
++EXPORT_SYMBOL(thermal_debug_enable);
++EXPORT_SYMBOL(high_temp_protect);
++EXPORT_SYMBOL(freq_update_flag);
++
++#define THERMAL_DBG(format,args...) \
++    if (thermal_debug_enable) { \
++        printk("[THERMAL]"format, ##args);     \
++    }
++
++static struct aml_virtual_thermal_device cpu_virtual_thermal = {};
++static struct aml_virtual_thermal_device gpu_virtual_thermal = {};
++static unsigned int report_interval[4] = {};
++
++/* CPU Zone information */
++#define PANIC_ZONE      4
++#define WARN_ZONE       3
++#define MONITOR_ZONE    2
++#define SAFE_ZONE       1
++
++#define GET_ZONE(trip) (trip + 2)
++#define GET_TRIP(zone) (zone - 2)
++
++static void amlogic_unregister_thermal(struct amlogic_thermal_platform_data *pdata);
++static int amlogic_register_thermal(struct amlogic_thermal_platform_data *pdata);
++
++void thermal_lock(struct mutex *lock)
++{
++    mutex_lock(lock);    
++}
++EXPORT_SYMBOL(thermal_lock);
++
++void thermal_unlock(struct mutex *lock)
++{
++    mutex_unlock(lock);
++}
++EXPORT_SYMBOL(thermal_unlock);
++
++/* Get mode callback functions for thermal zone */
++static int amlogic_get_mode(struct thermal_zone_device *thermal,
++        enum thermal_device_mode *mode)
++{
++    struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++
++    if (pdata)
++        *mode = pdata->mode;
++    return 0;
++}
++
++/* Set mode callback functions for thermal zone */
++static int amlogic_set_mode(struct thermal_zone_device *thermal,
++        enum thermal_device_mode mode)
++{
++    struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++    struct cpucore_cooling_device *cpucore_device =NULL;
++    struct gpucore_cooling_device *gpucore_device = NULL;
++    if(!pdata)
++        return -EINVAL;
++
++    //mutex_lock(&pdata->therm_dev->lock);
++
++    if (mode == THERMAL_DEVICE_ENABLED){
++        pdata->therm_dev->polling_delay = pdata->idle_interval;
++        if(pdata->cpucore_cool_dev){
++            cpucore_device=pdata->cpucore_cool_dev->devdata;
++            cpucore_device->stop_flag=0;
++        }
++        if(pdata->gpucore_cool_dev){
++            gpucore_device=pdata->gpucore_cool_dev->devdata;
++            gpucore_device->stop_flag=0;
++        }
++        if (pdata->keep_mode) {                     // start work 
++            schedule_delayed_work(&pdata->thermal_work, msecs_to_jiffies(100));
++        }
++    }
++    else{
++        pdata->therm_dev->polling_delay = 0;
++        if (pdata->keep_mode) {
++            cancel_delayed_work_sync(&pdata->thermal_work);
++            keep_mode_set_mode(pdata);
++        }
++        if(pdata->cpucore_cool_dev)
++            pdata->cpucore_cool_dev->ops->set_cur_state(pdata->cpucore_cool_dev,(0|CPU_STOP));
++        if(pdata->gpucore_cool_dev)
++            pdata->gpucore_cool_dev->ops->set_cur_state(pdata->gpucore_cool_dev,(0|GPU_STOP));
++    }
++
++    //mutex_unlock(&pdata->therm_dev->lock);
++
++    pdata->mode = mode;
++    thermal_zone_device_update(pdata->therm_dev);
++    pr_info("thermal polling set for duration=%d msec\n",
++            pdata->therm_dev->polling_delay);
++    return 0;
++}
++
++/* Get trip type callback functions for thermal zone */
++static int amlogic_get_trip_type(struct thermal_zone_device *thermal, int trip,
++        enum thermal_trip_type *type)
++{
++    if(trip < thermal->trips-1)
++        *type = THERMAL_TRIP_ACTIVE;
++    else if(trip == thermal->trips-1)
++        *type = THERMAL_TRIP_CRITICAL;
++    else 
++        return -EINVAL;
++    return 0;
++}
++
++/* Get trip temperature callback functions for thermal zone */
++static int amlogic_get_trip_temp(struct thermal_zone_device *thermal, int trip,
++        unsigned long *temp)
++{
++    struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++
++    if(trip > pdata->temp_trip_count ||trip<0)
++        return  -EINVAL;
++    mutex_lock(&pdata->lock);
++    *temp =pdata->tmp_trip[trip].temperature;
++    /* convert the temperature into millicelsius */
++    mutex_unlock(&pdata->lock);
++
++    return 0;
++}
++
++static int amlogic_set_trip_temp(struct thermal_zone_device *thermal, int trip,
++        unsigned long temp)
++{
++    struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++
++    if(trip > pdata->temp_trip_count ||trip<0)
++        return  -EINVAL;
++    mutex_lock(&pdata->lock);
++    pdata->tmp_trip[trip].temperature=temp;
++    /* convert the temperature into millicelsius */
++    mutex_unlock(&pdata->lock);
++    return 0;
++}
++
++/* Get critical temperature callback functions for thermal zone */
++static int amlogic_get_crit_temp(struct thermal_zone_device *thermal,
++        unsigned long *temp)
++{
++    int ret;
++    /* Panic zone */
++    ret =amlogic_get_trip_temp(thermal, thermal->trips-1, temp);
++
++    return ret;
++}
++
++
++/* Bind callback functions for thermal zone */
++static int amlogic_bind(struct thermal_zone_device *thermal,
++        struct thermal_cooling_device *cdev)
++{
++    int ret = 0, i;
++    struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++    int id;
++    char type[THERMAL_NAME_LENGTH];
++    unsigned long max;
++
++    if (!sscanf(cdev->type, "thermal-%7s-%d", type,&id))
++        return -EINVAL;
++    if(!strcmp(type,"cpufreq")){
++        /* Bind the thermal zone to the cpufreq cooling device */
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            if(pdata->tmp_trip[0].cpu_upper_level==THERMAL_CSTATE_INVALID)
++            {
++                printk("disable cpu cooling device by dtd\n");
++                ret = -EINVAL;
++                goto out;
++            }
++            if (thermal_zone_bind_cooling_device(thermal, i, cdev,
++                        pdata->tmp_trip[i].cpu_upper_level,
++                        pdata->tmp_trip[i].cpu_lower_level)) {
++                pr_err("error binding cdev inst %d\n", i);
++                ret = -EINVAL;
++                goto out;
++            }
++        }
++        pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
++        if (pdata->keep_mode) {
++            cdev->ops->get_max_state(cdev, &max);
++            keep_mode_bind(pdata, max, 0);
++        }
++    }
++
++    if(!strcmp(type,"gpufreq")){
++        struct gpufreq_cooling_device *gpufreq_dev=
++            (struct gpufreq_cooling_device *)cdev->devdata;
++        /* Bind the thermal zone to the cpufreq cooling device */
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            if(!gpufreq_dev->get_gpu_freq_level){
++                ret = -EINVAL;
++                pr_info("invalidate pointer %p\n",gpufreq_dev->get_gpu_freq_level);
++                goto out;
++            }
++            pdata->tmp_trip[i].gpu_lower_level=gpufreq_dev->get_gpu_freq_level(pdata->tmp_trip[i].gpu_upper_freq);
++            pdata->tmp_trip[i].gpu_upper_level=gpufreq_dev->get_gpu_freq_level(pdata->tmp_trip[i].gpu_lower_freq);
++            printk("pdata->tmp_trip[%d].gpu_lower_level=%d\n",i,pdata->tmp_trip[i].gpu_lower_level);
++            printk("pdata->tmp_trip[%d].gpu_upper_level=%d\n",i,pdata->tmp_trip[i].gpu_upper_level);
++            if(pdata->tmp_trip[0].gpu_lower_level==THERMAL_CSTATE_INVALID)
++            {
++                printk("disable gpu cooling device by dtd\n");
++                ret = -EINVAL;
++                goto out;
++            }
++            if (thermal_zone_bind_cooling_device(thermal, i, cdev,
++                        pdata->tmp_trip[i].gpu_upper_level,
++                        pdata->tmp_trip[i].gpu_lower_level)) {
++                pr_err("error binding cdev inst %d\n", i);
++                ret = -EINVAL;
++                goto out;
++            }
++        }
++        pdata->gpu_cool_dev=cdev;
++        pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
++        if (pdata->keep_mode) {
++            cdev->ops->get_max_state(cdev, &max);
++            keep_mode_bind(pdata, max, 1);
++        }
++    }
++
++    if(!strcmp(type,"cpucore")){
++        /* Bind the thermal zone to the cpufreq cooling device */
++        struct cpucore_cooling_device *cpucore_dev=
++            (struct cpucore_cooling_device *)cdev->devdata;
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            if(pdata->tmp_trip[0].cpu_core_num==THERMAL_CSTATE_INVALID)
++            {
++                printk("disable cpu cooling device by dtd\n");
++                ret = -EINVAL;
++                goto out;
++            }
++            if(pdata->tmp_trip[i].cpu_core_num !=-1)
++                pdata->tmp_trip[i].cpu_core_upper=cpucore_dev->max_cpu_core_num-pdata->tmp_trip[i].cpu_core_num;
++            else
++                pdata->tmp_trip[i].cpu_core_upper=pdata->tmp_trip[i].cpu_core_num;
++            printk("tmp_trip[%d].cpu_core_upper=%d\n",i,pdata->tmp_trip[i].cpu_core_upper);
++            if (thermal_zone_bind_cooling_device(thermal, i, cdev,
++                        pdata->tmp_trip[i].cpu_core_upper,
++                        pdata->tmp_trip[i].cpu_core_upper)) {
++                pr_err("error binding cdev inst %d\n", i);
++                ret = -EINVAL;
++                goto out;
++            }
++        }
++        pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
++        if (pdata->keep_mode) {
++            cdev->ops->get_max_state(cdev, &max);
++            keep_mode_bind(pdata, max, 2);
++        }
++    }
++
++    if(!strcmp(type,"gpucore")){
++        /* Bind the thermal zone to the cpufreq cooling device */
++        struct gpucore_cooling_device *gpucore_dev=
++            (struct gpucore_cooling_device *)cdev->devdata;
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            if(pdata->tmp_trip[0].cpu_core_num==THERMAL_CSTATE_INVALID)
++            {
++                printk("disable cpu cooling device by dtd\n");
++                ret = -EINVAL;
++                goto out;
++            }
++            if(pdata->tmp_trip[i].gpu_core_num != -1)
++                pdata->tmp_trip[i].gpu_core_upper=gpucore_dev->max_gpu_core_num-pdata->tmp_trip[i].gpu_core_num;
++            else
++                pdata->tmp_trip[i].gpu_core_upper=pdata->tmp_trip[i].gpu_core_num;
++
++            printk("tmp_trip[%d].gpu_core_upper=%d\n",i,pdata->tmp_trip[i].gpu_core_upper);
++            if (thermal_zone_bind_cooling_device(thermal, i, cdev,
++                        pdata->tmp_trip[i].gpu_core_upper,
++                        pdata->tmp_trip[i].gpu_core_upper)) {
++                pr_err("error binding cdev inst %d\n", i);
++                ret = -EINVAL;
++                goto out;
++            }
++        }
++        pdata->gpucore_cool_dev=cdev;
++        pr_info("%s bind %s okay !\n",thermal->type,cdev->type);
++        if (pdata->keep_mode) {
++            cdev->ops->get_max_state(cdev, &max);
++            keep_mode_bind(pdata, max, 3);
++        }
++    }
++    return ret;
++out:
++    return ret;
++}
++
++/* Unbind callback functions for thermal zone */
++static int amlogic_unbind(struct thermal_zone_device *thermal,
++        struct thermal_cooling_device *cdev)
++{
++    int i;
++    if(thermal && cdev){
++        struct  amlogic_thermal_platform_data *pdata= thermal->devdata;
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            pr_info("\n%s unbinding %s ",thermal->type,cdev->type);
++            if (thermal_zone_unbind_cooling_device(thermal, i, cdev)) {
++                pr_err(" error  %d \n", i);
++                return -EINVAL;
++            }
++            pr_info(" okay\n");
++            return 0;
++        }
++    }else{
++        return -EINVAL;
++    }
++    return -EINVAL;
++}
++#define ABS(a) ((a) > 0 ? (a) : -(a))
++
++void *thermal_alloc(size_t len)
++{
++    return kzalloc(len, GFP_KERNEL);
++}
++EXPORT_SYMBOL(thermal_alloc);
++
++static void thermal_work(struct work_struct *work)
++{
++    struct cpufreq_policy *policy = cpufreq_cpu_get(0);
++    struct amlogic_thermal_platform_data *pdata;
++    int cpu_freq = 0;
++
++    pdata = container_of((struct delayed_work *)work, struct amlogic_thermal_platform_data, thermal_work);
++    if (policy) {
++        cpu_freq = policy->cur;
++    }
++    keep_mode_work(pdata, cpu_freq);
++    if (pdata->mode == THERMAL_DEVICE_ENABLED) {             // no need to do this work again if thermal disabled
++        schedule_delayed_work(&pdata->thermal_work, msecs_to_jiffies(100));
++    }
++}
++
++static int aml_virtaul_thermal_probe(struct platform_device *pdev, struct amlogic_thermal_platform_data *pdata)
++{
++    int ret, len, cells; 
++    struct property *prop;
++    void *buf;
++
++    if (!of_property_read_bool(pdev->dev.of_node, "use_virtual_thermal")) {
++        printk("%s, virtual thermal is not enabled\n", __func__);
++        pdata->virtual_thermal_en = 0;
++        return 0;
++    } else {
++        printk("%s, virtual thermal enabled\n", __func__);
++    }
++
++    ret = of_property_read_u32(pdev->dev.of_node,
++            "freq_sample_period",
++            &pdata->freq_sample_period);
++    if (ret) {
++        printk("%s, get freq_sample_period failed, us 30 as default\n", __func__);
++        pdata->freq_sample_period = 30;
++    } else {
++        printk("%s, get freq_sample_period with value:%d\n", __func__, pdata->freq_sample_period);    
++    }
++    ret = of_property_read_u32_array(pdev->dev.of_node, 
++            "report_time", 
++            report_interval, sizeof(report_interval) / sizeof(u32));
++    if (ret) {
++        printk("%s, get report_time failed\n", __func__);    
++        goto error;
++    } else {
++        printk("[virtual_thermal] report interval:%4d, %4d, %4d, %4d\n",
++                report_interval[0], report_interval[1], report_interval[2], report_interval[3]);    
++    }
++    /*
++     * read cpu_virtal
++     */
++    prop = of_find_property(pdev->dev.of_node, "cpu_virtual", &len);
++    if (!prop) {
++        printk("%s, cpu virtual not found\n", __func__);
++        goto error;
++    }
++    cells = len / sizeof(struct aml_virtual_thermal);
++    buf = kzalloc(len, GFP_KERNEL);
++    if (!buf) {
++        printk("%s, no memory\n", __func__);
++        return -ENOMEM;
++    }
++    ret = of_property_read_u32_array(pdev->dev.of_node, 
++            "cpu_virtual", 
++            buf, len/sizeof(u32)); 
++    if (ret) {
++        printk("%s, read cpu_virtual failed\n", __func__);
++        kfree(buf);
++        goto error;
++    }
++    cpu_virtual_thermal.count   = cells;
++    cpu_virtual_thermal.thermal = buf;
++
++    /*
++     * read gpu_virtal
++     */
++    prop = of_find_property(pdev->dev.of_node, "gpu_virtual", &len);
++    if (!prop) {
++        printk("%s, gpu virtual not found\n", __func__);
++        goto error;
++    }
++    cells = len / sizeof(struct aml_virtual_thermal);
++    buf = kzalloc(len, GFP_KERNEL);
++    if (!buf) {
++        printk("%s, no memory\n", __func__);
++        return -ENOMEM;
++    }
++    ret = of_property_read_u32_array(pdev->dev.of_node, 
++            "gpu_virtual", 
++            buf, len/sizeof(u32)); 
++    if (ret) {
++        printk("%s, read gpu_virtual failed\n", __func__);
++        kfree(buf);
++        goto error;
++    }
++    gpu_virtual_thermal.count   = cells;
++    gpu_virtual_thermal.thermal = buf;
++
++#if DBG_VIRTUAL
++    printk("cpu_virtal cells:%d, table:\n", cpu_virtual_thermal.count);
++    for (len = 0; len < cpu_virtual_thermal.count; len++) {
++        printk("%2d, %8d, %4d, %4d, %4d, %4d\n",
++                len, 
++                cpu_virtual_thermal.thermal[len].freq,
++                cpu_virtual_thermal.thermal[len].temp_time[0],
++                cpu_virtual_thermal.thermal[len].temp_time[1],
++                cpu_virtual_thermal.thermal[len].temp_time[2],
++                cpu_virtual_thermal.thermal[len].temp_time[3]);
++    }
++    printk("gpu_virtal cells:%d, table:\n", gpu_virtual_thermal.count);
++    for (len = 0; len < gpu_virtual_thermal.count; len++) {
++        printk("%2d, %8d, %4d, %4d, %4d, %4d\n",
++                len, 
++                gpu_virtual_thermal.thermal[len].freq,
++                gpu_virtual_thermal.thermal[len].temp_time[0],
++                gpu_virtual_thermal.thermal[len].temp_time[1],
++                gpu_virtual_thermal.thermal[len].temp_time[2],
++                gpu_virtual_thermal.thermal[len].temp_time[3]);
++    }
++#endif
++
++    pdata->virtual_thermal_en = 1;    
++    return 0;
++
++error: 
++    pdata->virtual_thermal_en = 0;
++    return -1;
++}
++
++static void aml_virtual_thermal_remove(struct amlogic_thermal_platform_data *pdata)
++{
++    kfree(cpu_virtual_thermal.thermal);    
++    kfree(gpu_virtual_thermal.thermal);    
++    pdata->virtual_thermal_en = 0;
++}
++
++static int check_freq_level(struct aml_virtual_thermal_device *dev, unsigned int freq)
++{
++    int i = 0;
++
++    if (freq >= dev->thermal[dev->count-1].freq) {
++        return dev->count - 1;
++    }
++    for (i = 0; i < dev->count - 1; i++) {
++        if (freq > dev->thermal[i].freq && freq <= dev->thermal[i + 1].freq) {
++            return i + 1;
++        }
++    }
++    return 0; 
++}
++
++static int check_freq_level_cnt(unsigned int cnt) 
++{
++    int i;
++
++    if (cnt >= report_interval[3]) {
++        return  3; 
++    } 
++    for (i = 0; i < 3; i++) {
++        if (cnt >= report_interval[i] && cnt < report_interval[i + 1]) {
++            return i;
++        }
++    }
++    return 0;
++}
++
++static unsigned long aml_cal_virtual_temp(struct amlogic_thermal_platform_data *pdata)
++{
++    static unsigned int cpu_freq_level_cnt  = 0, gpu_freq_level_cnt  = 0;
++    static unsigned int last_cpu_freq_level = 0, last_gpu_freq_level = 0;
++    static unsigned int cpu_temp = 40, gpu_temp = 40;                   // default set to 40 when at homescreen
++    unsigned int curr_cpu_avg_freq,   curr_gpu_avg_freq;
++    int curr_cpu_freq_level, curr_gpu_freq_level;
++    int cnt_level, level_diff; 
++    int temp_update = 0, final_temp;
++
++    /*
++     * CPU temp 
++     */
++    if (atomic_read(&freq_update_flag)) {
++        curr_cpu_avg_freq = pdata->monitor.avg_cpu_freq; 
++        curr_cpu_freq_level = check_freq_level(&cpu_virtual_thermal, curr_cpu_avg_freq); 
++        level_diff = curr_cpu_freq_level - last_cpu_freq_level;
++        if (ABS(level_diff) <= 1) {  // freq change is not large 
++            cpu_freq_level_cnt++;
++            cnt_level = check_freq_level_cnt(cpu_freq_level_cnt);
++            cpu_temp  = cpu_virtual_thermal.thermal[curr_cpu_freq_level].temp_time[cnt_level];
++#if DBG_VIRTUAL
++            printk("%s, cur_freq:%7d, freq_level:%d, cnt_level:%d, cnt:%d, cpu_temp:%d\n",
++                    __func__, curr_cpu_avg_freq, curr_cpu_freq_level, cnt_level, cpu_freq_level_cnt, cpu_temp);
++#endif
++        } else {                                                // level not match
++            cpu_temp = cpu_virtual_thermal.thermal[curr_cpu_freq_level].temp_time[0]; 
++#if DBG_VIRTUAL
++            printk("%s, cur_freq:%7d, cur_level:%d, last_level:%d, last_cnt_level:%d, cpu_temp:%d\n",
++                    __func__, curr_cpu_avg_freq, curr_cpu_freq_level, last_cpu_freq_level, cpu_freq_level_cnt, cpu_temp);
++#endif
++            cpu_freq_level_cnt = 0;
++        }
++        last_cpu_freq_level = curr_cpu_freq_level;
++
++        curr_gpu_avg_freq = pdata->monitor.avg_gpu_freq; 
++        curr_gpu_freq_level = check_freq_level(&gpu_virtual_thermal, curr_gpu_avg_freq); 
++        level_diff = curr_gpu_freq_level - last_gpu_freq_level;
++        if (ABS(level_diff) <= 1) {  // freq change is not large 
++            gpu_freq_level_cnt++;
++            cnt_level = check_freq_level_cnt(gpu_freq_level_cnt);
++            gpu_temp  = gpu_virtual_thermal.thermal[curr_gpu_freq_level].temp_time[cnt_level];
++#if DBG_VIRTUAL
++            printk("%s, cur_freq:%7d, freq_level:%d, cnt_level:%d, cnt:%d, gpu_temp:%d\n",
++                    __func__, curr_gpu_avg_freq, curr_gpu_freq_level, cnt_level, gpu_freq_level_cnt, gpu_temp);
++#endif
++        } else {                                                // level not match
++            gpu_temp = gpu_virtual_thermal.thermal[curr_gpu_freq_level].temp_time[0]; 
++            gpu_freq_level_cnt = 0;
++#if DBG_VIRTUAL
++            printk("%s, cur_freq:%7d, cur_level:%d, last_level:%d, gpu_temp:%d\n",
++                    __func__, curr_gpu_avg_freq, curr_gpu_freq_level, last_gpu_freq_level, gpu_temp);
++#endif
++        }
++        last_gpu_freq_level = curr_gpu_freq_level;
++
++        atomic_set(&freq_update_flag, 0);
++        temp_update = 1; 
++    }
++
++    if (cpu_temp <= 0 && gpu_temp <= 0) {
++        printk("%s, Bug here, cpu & gpu temp can't be 0, cpu_temp:%d, gpu_temp:%d\n", __func__, cpu_temp, gpu_temp);
++        final_temp = 40;    
++    }
++    final_temp = (cpu_temp >= gpu_temp ? cpu_temp : gpu_temp);
++    if (temp_update) {
++#if DBG_VIRTUAL
++        printk("final temp:%d\n", final_temp);    
++#endif
++    }
++    return final_temp;
++}
++
++/* Get temperature callback functions for thermal zone */
++static int amlogic_get_temp(struct thermal_zone_device *thermal,
++        unsigned long *temp)
++{
++    struct amlogic_thermal_platform_data *pdata = thermal->devdata;
++
++    if (pdata->trim_flag) { 
++        *temp = (unsigned long)get_cpu_temp();
++        pdata->current_temp = *temp;
++    } else if (pdata->virtual_thermal_en) {
++        *temp = aml_cal_virtual_temp(pdata); 
++    } else {
++        *temp = 45;                     // fix cpu temperature to 45 if not trimed && disable virtual thermal    
++    }
++    return 0;
++}
++
++/* Get the temperature trend */
++static int amlogic_get_trend(struct thermal_zone_device *thermal,
++        int trip, enum thermal_trend *trend)
++{
++    return 1;
++}
++/* Operation callback functions for thermal zone */
++static struct thermal_zone_device_ops const amlogic_dev_ops = {
++    .bind = amlogic_bind,
++    .unbind = amlogic_unbind,
++    .get_temp = amlogic_get_temp,
++    .get_trend = amlogic_get_trend,
++    .get_mode = amlogic_get_mode,
++    .set_mode = amlogic_set_mode,
++    .get_trip_type = amlogic_get_trip_type,
++    .get_trip_temp = amlogic_get_trip_temp,
++    .set_trip_temp = amlogic_set_trip_temp,
++    .get_crit_temp = amlogic_get_crit_temp,
++};
++
++/*
++ * sysfs for keep_mode
++ */
++#ifdef CONFIG_CPU_FREQ_GOV_HOTPLUG              // for DEBUG
++extern unsigned int max_cpu_num;
++static ssize_t max_cpu_num_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++    return sprintf(buf, "%d\n", max_cpu_num);
++}
++#endif
++
++static ssize_t thermal_debug_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++    return sprintf(buf, "%d\n", thermal_debug_enable);
++}
++
++static ssize_t thermal_debug_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
++{
++    int32_t data = simple_strtol(buf, NULL, 10);
++
++    if (data) {
++        thermal_debug_enable = 1;    
++    } else {
++        thermal_debug_enable = 0;    
++    }
++    return count;
++}
++
++static ssize_t keep_mode_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++    struct thermal_zone_device *tz = container_of(dev, struct thermal_zone_device, device);
++    struct amlogic_thermal_platform_data *pdata = tz->devdata;
++
++    return sprintf(buf, "%s\n", pdata->keep_mode ? "enabled": "disabled");
++}
++
++static ssize_t keep_mode_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
++{
++    struct thermal_zone_device *tz = container_of(dev, struct thermal_zone_device, device);
++    struct amlogic_thermal_platform_data *pdata = tz->devdata;
++    if (!strncmp(buf, "enabled", sizeof("enabled") - 1)) {
++        pdata->keep_mode = 1;
++    } else if (!strncmp(buf, "disabled", sizeof("disabled") - 1)) {
++        pdata->keep_mode = 0;
++    }
++    return count;
++}
++
++static ssize_t keep_mode_threshold_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++    struct thermal_zone_device *tz = container_of(dev, struct thermal_zone_device, device);
++    struct amlogic_thermal_platform_data *pdata = tz->devdata;
++
++    return sprintf(buf, "%d\n", pdata->keep_mode_threshold);
++}
++
++static ssize_t keep_mode_threshold_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
++{
++    struct thermal_zone_device *tz = container_of(dev, struct thermal_zone_device, device);
++    struct amlogic_thermal_platform_data *pdata = tz->devdata;
++    int32_t data = simple_strtol(buf, NULL, 10);
++
++    if (data > 200) {
++        printk("input is %d, seems too large, invalid\n", data);    
++    }
++    keep_mode_update_threshold(pdata, data);
++    printk("set keep_mode_threshold to %d\n", data);
++    return count;
++}
++
++static ssize_t high_temp_protect_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++    return sprintf(buf, "%d\n", high_temp_protect);
++}
++
++static ssize_t high_temp_protect_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
++{
++    struct thermal_zone_device *tz = container_of(dev, struct thermal_zone_device, device);
++    struct amlogic_thermal_platform_data *pdata = tz->devdata;
++    int32_t data = simple_strtol(buf, NULL, 10);
++
++    high_temp_protect = data ? 1 : 0;
++    if (high_temp_protect) {
++        pdata->tmp_trip[1].temperature = pdata->keep_mode_threshold + 25; 
++    } else {
++        pdata->tmp_trip[1].temperature = 260; 
++    }
++    printk("high temperature protect %s\n", high_temp_protect ? "enabled" : "disabled");
++    return count;
++}
++
++static struct device_attribute amlogic_thermal_attr[] = {
++#ifdef CONFIG_CPU_FREQ_GOV_HOTPLUG
++    __ATTR(max_cpu_num, 0444, max_cpu_num_show, NULL),
++#endif
++    __ATTR(thermal_debug, 0644, thermal_debug_show, thermal_debug_store),
++    __ATTR(keep_mode, 0644, keep_mode_show, keep_mode_store), 
++    __ATTR(keep_mode_threshold, 0644, keep_mode_threshold_show, keep_mode_threshold_store),
++    __ATTR(high_temp_protect, 0644, high_temp_protect_show, high_temp_protect_store)
++};
++
++/* Register with the in-kernel thermal management */
++static int amlogic_register_thermal(struct amlogic_thermal_platform_data *pdata)
++{
++    int ret=0, j;
++    struct cpumask mask_val;
++
++    memset(&mask_val,0,sizeof(struct cpumask));
++    cpumask_set_cpu(0, &mask_val);
++    pdata->cpu_cool_dev= cpufreq_cooling_register(&mask_val);
++    if (IS_ERR(pdata->cpu_cool_dev)) {
++        pr_err("Failed to register cpufreq cooling device\n");
++        ret = -EINVAL;
++        goto err_unregister;
++    }
++    pdata->cpucore_cool_dev = cpucore_cooling_register();
++    if (IS_ERR(pdata->cpucore_cool_dev)) {
++        pr_err("Failed to register cpufreq cooling device\n");
++        ret = -EINVAL;
++        goto err_unregister;
++    }
++
++    pdata->therm_dev = thermal_zone_device_register(pdata->name,
++            pdata->temp_trip_count, ((1 << pdata->temp_trip_count) - 1), pdata, &amlogic_dev_ops, NULL, 0,
++            pdata->idle_interval);
++
++    if (IS_ERR(pdata->therm_dev)) {
++        pr_err("Failed to register thermal zone device, err:%p\n", pdata->therm_dev);
++        ret = -EINVAL;
++        goto err_unregister;
++    }
++
++    if (pdata->keep_mode) {                                     // create sysfs for keep_mode
++        for (j = 0; j < ARRAY_SIZE(amlogic_thermal_attr); j++) {
++            device_create_file(&pdata->therm_dev->device, &amlogic_thermal_attr[j]);
++        } 
++    }
++    pr_info("amlogic: Kernel Thermal management registered\n");
++
++    return 0;
++
++err_unregister:
++    amlogic_unregister_thermal(pdata);
++    return ret;
++}
++
++/* Un-Register with the in-kernel thermal management */
++static void amlogic_unregister_thermal(struct amlogic_thermal_platform_data *pdata)
++{
++    if (pdata->therm_dev)
++        thermal_zone_device_unregister(pdata->therm_dev);
++    if (pdata->cpu_cool_dev)
++        cpufreq_cooling_unregister(pdata->cpu_cool_dev);
++
++    pr_info("amlogic: Kernel Thermal management unregistered\n");
++}
++
++int get_desend(void)
++{
++    int i;
++    unsigned int freq = CPUFREQ_ENTRY_INVALID;
++    int descend = -1;
++    struct cpufreq_frequency_table *table =
++        cpufreq_frequency_get_table(0);
++
++    if (!table)
++        return -EINVAL;
++
++    for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
++        /* ignore invalid entries */
++        if (table[i].frequency == CPUFREQ_ENTRY_INVALID)
++            continue;
++
++        /* ignore duplicate entry */
++        if (freq == table[i].frequency)
++            continue;
++
++        /* get the frequency order */
++        if (freq != CPUFREQ_ENTRY_INVALID && descend == -1){
++            descend = !!(freq > table[i].frequency);
++            break;
++        }
++
++        freq = table[i].frequency;
++    }
++    return descend;
++}
++int fix_to_freq(int freqold,int descend)
++{
++    int i;
++    unsigned int freq = CPUFREQ_ENTRY_INVALID;
++    struct cpufreq_frequency_table *table =
++        cpufreq_frequency_get_table(0);
++
++    if (!table)
++        return -EINVAL;
++
++    for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
++        /* ignore invalid entry */
++        if (table[i].frequency == CPUFREQ_ENTRY_INVALID)
++            continue;
++
++        /* ignore duplicate entry */
++        if (freq == table[i].frequency)
++            continue;
++        freq = table[i].frequency;
++        if(descend){
++            if(freqold>=table[i+1].frequency && freqold<=table[i].frequency)
++                return table[i+1].frequency;
++        }
++        else{
++            if(freqold>=table[i].frequency && freqold<=table[i+1].frequency)
++                return table[i].frequency;
++        }
++    }
++    return -EINVAL;
++}
++
++void thermal_atomic_set(atomic_t *a, int value)
++{
++    atomic_set(a, 1);    
++}
++EXPORT_SYMBOL(thermal_atomic_set);
++
++static struct amlogic_thermal_platform_data * amlogic_thermal_init_from_dts(struct platform_device *pdev, int trim_flag)
++{
++    int    i = 0, ret = -1, val = 0, cells, descend, error = 0;
++    struct property   *prop;
++    struct temp_level *tmp_level = NULL;
++    struct amlogic_thermal_platform_data *pdata = NULL;
++
++    if(!of_property_read_u32(pdev->dev.of_node, "trip_point", &val)){
++        //INIT FROM DTS
++        pdata=kzalloc(sizeof(*pdata),GFP_KERNEL);
++        if(!pdata){
++            goto err;
++        }
++        memset((void* )pdata,0,sizeof(*pdata));
++        ret=of_property_read_u32(pdev->dev.of_node, "#thermal-cells", &val);
++        if(ret){
++            dev_err(&pdev->dev, "dt probe #thermal-cells failed: %d\n", ret);
++            goto err;
++        }
++        printk("#thermal-cells=%d\n",val);
++        cells=val;
++
++        /*
++         * process for KEEP_MODE and virtual thermal
++         * Logic: If virtual thermal is enabled, then ignore keep_mode
++         *        
++         */
++        pdata->trim_flag = trim_flag;
++        if (!pdata->trim_flag) {                                // chip is not trimmed, use virtual thermal
++            aml_virtaul_thermal_probe(pdev, pdata);
++        } else if (of_property_read_bool(pdev->dev.of_node, "keep_mode")) {
++            if (of_property_read_u32(pdev->dev.of_node, "keep_mode_threshold", &pdata->keep_mode_threshold)) {
++                printk("ERROR:keep_mode is set but not found 'keep_mode_threshold'\n");
++                error = 1;
++            }
++            if (of_property_read_u32_array(pdev->dev.of_node,
++                        "keep_mode_max_range",
++                        pdata->keep_mode_max_range,
++                        sizeof(pdata->keep_mode_max_range)/sizeof(u32))) {
++                printk("ERROR:keep_mode is set but not found 'keep_mode_max_range'\n");
++                error = 1;
++            }
++            if (!error && pdata->trim_flag) {                  // keep mode should not used for virtual thermal right now
++                printk("keep_mode enabled\n");
++                printk("keep_mode_max_range:   [%7d, %3d, %d, %d]\n",
++                        pdata->keep_mode_max_range[0], pdata->keep_mode_max_range[1],
++                        pdata->keep_mode_max_range[2], pdata->keep_mode_max_range[3]);
++                pdata->keep_mode = 1;
++                pdata->freq_sample_period = 5;
++            }
++        } else {
++            printk("keep_mode is disabled\n");
++        }
++        if(pdata->keep_mode || !pdata->trim_flag){
++            INIT_DELAYED_WORK(&pdata->thermal_work, thermal_work);
++            schedule_delayed_work(&pdata->thermal_work, msecs_to_jiffies(100));
++            atomic_set(&freq_update_flag, 0);
++        }
++
++        prop = of_find_property(pdev->dev.of_node, "trip_point", &val);
++        if (!prop){
++            dev_err(&pdev->dev, "read %s length error\n","trip_point");
++            goto err;
++        }
++        if (pdata->keep_mode) { 
++            pdata->temp_trip_count = 2;
++        } else {
++            pdata->temp_trip_count=val/cells/sizeof(u32);
++        }
++        printk("pdata->temp_trip_count=%d\n",pdata->temp_trip_count);
++        tmp_level=kzalloc(sizeof(*tmp_level)*pdata->temp_trip_count,GFP_KERNEL);
++        pdata->tmp_trip=kzalloc(sizeof(struct temp_trip)*pdata->temp_trip_count,GFP_KERNEL);
++        if(!tmp_level){
++            goto err;
++        }
++
++        if (pdata->keep_mode) {     // keep mode only need one point
++            keep_mode_temp_level_init(pdata, tmp_level);
++        } else {
++            ret=of_property_read_u32_array(pdev->dev.of_node,"trip_point",(u32 *)tmp_level,val/sizeof(u32));
++            if (ret){
++                dev_err(&pdev->dev, "read %s data error\n","trip_point");
++                goto err;
++            }
++        }
++        descend=get_desend();
++        for (i = 0; i < pdata->temp_trip_count; i++) {
++            printk("temperature=%d on trip point=%d\n",tmp_level[i].temperature,i);
++            pdata->tmp_trip[i].temperature=tmp_level[i].temperature;
++            printk("fixing high_freq=%d to ",tmp_level[i].cpu_high_freq);
++            tmp_level[i].cpu_high_freq=fix_to_freq(tmp_level[i].cpu_high_freq,descend);
++            pdata->tmp_trip[i].cpu_lower_level=cpufreq_cooling_get_level(0,tmp_level[i].cpu_high_freq);
++            printk("%d at trip point %d,level=%d\n",tmp_level[i].cpu_high_freq,i,pdata->tmp_trip[i].cpu_lower_level);	
++
++            printk("fixing low_freq=%d to ",tmp_level[i].cpu_low_freq);
++            tmp_level[i].cpu_low_freq=fix_to_freq(tmp_level[i].cpu_low_freq,descend);
++            pdata->tmp_trip[i].cpu_upper_level=cpufreq_cooling_get_level(0,tmp_level[i].cpu_low_freq);
++            printk("%d at trip point %d,level=%d\n",tmp_level[i].cpu_low_freq,i,pdata->tmp_trip[i].cpu_upper_level);
++            pdata->tmp_trip[i].gpu_lower_freq=tmp_level[i].gpu_low_freq;
++            pdata->tmp_trip[i].gpu_upper_freq=tmp_level[i].gpu_high_freq;
++            printk("gpu[%d].gpu_high_freq=%d,tmp_level[%d].gpu_high_freq=%d\n",i,tmp_level[i].gpu_high_freq,i,tmp_level[i].gpu_low_freq);
++
++            pdata->tmp_trip[i].cpu_core_num=tmp_level[i].cpu_core_num;
++            printk("cpu[%d] core num==%d\n",i,pdata->tmp_trip[i].cpu_core_num);
++            pdata->tmp_trip[i].gpu_core_num=tmp_level[i].gpu_core_num;
++            printk("gpu[%d] core num==%d\n",i,pdata->tmp_trip[i].gpu_core_num);
++        }
++
++        ret= of_property_read_u32(pdev->dev.of_node, "idle_interval", &val);
++        if (ret){
++            dev_err(&pdev->dev, "read %s  error\n","idle_interval");
++            goto err;
++        }
++        pdata->idle_interval=val;
++        printk("idle interval=%d\n",pdata->idle_interval);
++        ret=of_property_read_string(pdev->dev.of_node,"dev_name",&pdata->name);
++        if (ret){
++            dev_err(&pdev->dev, "read %s  error\n","dev_name");
++            goto err;
++        }
++        printk("pdata->name:%s, pdata:%p\n",pdata->name, pdata);
++        pdata->mode=THERMAL_DEVICE_ENABLED;
++        if(tmp_level)
++            kfree(tmp_level);
++        printk("%s, %d\n", __func__, __LINE__);
++        return pdata;
++    }	
++err:
++    if(tmp_level)
++        kfree(tmp_level);
++    if(pdata)
++        kfree(pdata);
++    pdata= NULL;
++    return pdata;
++}
++
++static struct amlogic_thermal_platform_data * amlogic_thermal_initialize(struct platform_device *pdev, int trim_flag)
++{
++    struct amlogic_thermal_platform_data *pdata=NULL;
++    pdata=amlogic_thermal_init_from_dts(pdev, trim_flag);
++    printk("%s, %d, pdata:%p\n", __func__, __LINE__, pdata);
++    return pdata;
++}
++
++static const struct of_device_id amlogic_thermal_match[] = {
++    {
++        .compatible = "amlogic-thermal",
++    },
++    {},
++};
++
++#ifdef CONFIG_HIBERNATION
++static int amlogic_thermal_freeze(struct device *dev)
++{
++    return 0;
++}
++
++static int amlogic_thermal_thaw(struct device *dev)
++{
++    return 0;
++}
++
++static int amlogic_thermal_restore(struct device *dev)
++{
++    thermal_firmware_init();
++
++    return 0;
++}
++
++static struct dev_pm_ops amlogic_theraml_pm = {
++    .freeze     = amlogic_thermal_freeze,
++    .thaw       = amlogic_thermal_thaw,
++    .restore    = amlogic_thermal_restore,
++};
++#endif
++
++static int amlogic_thermal_probe(struct platform_device *pdev)
++{
++    int ret, trim_flag;
++    struct amlogic_thermal_platform_data *pdata=NULL;
++
++    ret=thermal_firmware_init();
++    if(ret<0){
++        printk("%s, this chip is not trimmed, use virtual thermal\n", __func__);
++        trim_flag = 0;
++    }else{
++        printk("%s, this chip is trimmed, use thermal\n", __func__);
++        trim_flag = 1;
++    }
++
++    dev_info(&pdev->dev, "amlogic thermal probe start\n");
++    pdata = amlogic_thermal_initialize(pdev, trim_flag);
++    if (!pdata) {
++        dev_err(&pdev->dev, "Failed to initialize thermal\n");
++        goto err;
++    }
++    mutex_init(&pdata->lock);
++    pdev->dev.platform_data=pdata;
++    platform_set_drvdata(pdev, pdata);
++    ret = amlogic_register_thermal(pdata);
++    if (ret) {
++        dev_err(&pdev->dev, "Failed to register thermal interface\n");
++        goto err;
++    }
++    dev_info(&pdev->dev, "amlogic thermal probe done\n");
++    return 0;
++err:
++    platform_set_drvdata(pdev, NULL);
++    return ret;
++}
++
++static int amlogic_thermal_remove(struct platform_device *pdev)
++{
++    struct amlogic_thermal_platform_data *pdata = platform_get_drvdata(pdev);
++
++    aml_virtual_thermal_remove(pdata);
++
++    amlogic_unregister_thermal(pdata);
++
++    platform_set_drvdata(pdev, NULL);
++
++    return 0;
++}
++
++struct platform_driver amlogic_thermal_driver = {
++    .driver = {
++        .name   = "amlogic-thermal",
++        .owner  = THIS_MODULE,
++    #ifdef CONFIG_HIBERNATION
++        .pm     = &amlogic_theraml_pm,
++    #endif
++        .of_match_table = of_match_ptr(amlogic_thermal_match),
++    },
++    .probe = amlogic_thermal_probe,
++    .remove	= amlogic_thermal_remove,
++};
++
++static int __init amlogic_thermal_driver_init(void) 
++{ 
++	return platform_driver_register(&(amlogic_thermal_driver)); 
++} 
++late_initcall(amlogic_thermal_driver_init); 
++static void __exit amlogic_thermal_driver_exit(void) 
++{ 
++	platform_driver_unregister(&(amlogic_thermal_driver) ); 
++} 
++module_exit(amlogic_thermal_driver_exit);
++
++MODULE_DESCRIPTION("amlogic thermal Driver");
++MODULE_AUTHOR("Amlogic SH platform team");
++MODULE_ALIAS("platform:amlogic-thermal");
++MODULE_LICENSE("GPL");
++
+-- 
+1.9.1
+

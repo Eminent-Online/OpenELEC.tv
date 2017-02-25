@@ -1,0 +1,13 @@
+diff --git a/xbmc/utils/AMLUtils.cpp b/xbmc/utils/AMLUtils.cpp
+index 1b54435..369624d 100644
+--- a/xbmc/utils/AMLUtils.cpp
++++ b/xbmc/utils/AMLUtils.cpp
+@@ -195,7 +195,7 @@ bool aml_support_h264_4k2k()
+ 
+ void aml_set_audio_passthrough(bool passthrough)
+ {
+-  SysfsUtils::SetInt("/sys/class/audiodsp/digital_raw", passthrough ? 2:0);
++  SysfsUtils::SetInt("/sys/class/audiodsp/digital_raw", passthrough ? 1:0);
+ }
+ 
+ void aml_probe_hdmi_audio()
