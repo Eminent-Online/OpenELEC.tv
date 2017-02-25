@@ -17,12 +17,12 @@
 ################################################################################
 
 PKG_NAME="libamcodec"
-PKG_VERSION="5e23a81"
+PKG_VERSION="2fba80c"
 PKG_REV="1"
 PKG_ARCH="arm"
 PKG_LICENSE="other"
 PKG_SITE="http://openlinux.amlogic.com"
-PKG_GIT_URL="https://github.com/codesnake/libamcodec.git"
+PKG_GIT_URL="https://github.com/surkovalex/libamcodec.git"
 PKG_GIT_BRANCH="master"
 PKG_DEPENDS_TARGET="toolchain"
 PKG_PRIORITY="optional"
