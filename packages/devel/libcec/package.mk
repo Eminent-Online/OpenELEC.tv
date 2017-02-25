@@ -33,8 +33,8 @@ PKG_LONGDESC="libCEC is an open-source dual licensed library designed for commun
 PKG_IS_ADDON="no"
 PKG_AUTORECONF="no"
 
-if [ "$KODIPLAYER_DRIVER" = "bcm2835-firmware" ]; then
-  PKG_DEPENDS_TARGET="$PKG_DEPENDS_TARGET bcm2835-firmware"
+if [ "$KODIPLAYER_DRIVER" = "bcm2835-driver" ]; then
+  PKG_DEPENDS_TARGET="$PKG_DEPENDS_TARGET bcm2835-driver"
 fi
 
 if [ "$KODIPLAYER_DRIVER" = "libfslvpuwrap" ]; then
@@ -44,13 +44,17 @@ else
 fi
 
 if [ "$KODIPLAYER_DRIVER" = "libamcodec" ]; then
-  EXTRA_CMAKE_OPTS="$EXTRA_CMAKE_OPTS -DHAVE_AMLOGIC_API=1"
+  if [ "$TARGET_ARCH" = "arm" ]; then
+    EXTRA_CMAKE_OPTS="$EXTRA_CMAKE_OPTS -DHAVE_AOCEC_API=0 -DHAVE_AMLOGIC_API=1"
+  elif [ "$TARGET_ARCH" = "aarch64" ]; then
+    EXTRA_CMAKE_OPTS="$EXTRA_CMAKE_OPTS -DHAVE_AOCEC_API=1 -DHAVE_AMLOGIC_API=0"
+  fi
 else
-  EXTRA_CMAKE_OPTS="$EXTRA_CMAKE_OPTS -DHAVE_AMLOGIC_API=0"
+  EXTRA_CMAKE_OPTS="$EXTRA_CMAKE_OPTS -DHAVE_AOCEC_API=0 -DHAVE_AMLOGIC_API=0"
 fi
 
 configure_target() {
-  if [ "$KODIPLAYER_DRIVER" = "bcm2835-firmware" ]; then
+  if [ "$KODIPLAYER_DRIVER" = "bcm2835-driver" ]; then
     export CXXFLAGS="$CXXFLAGS \
       -I$SYSROOT_PREFIX/usr/include/interface/vcos/pthreads/ \
       -I$SYSROOT_PREFIX/usr/include/interface/vmcs_host/linux"
@@ -71,5 +75,7 @@ configure_target() {
 }
 
 post_makeinstall_target() {
-  mv $INSTALL/usr/lib/python2.7/dist-packages $INSTALL/usr/lib/python2.7/site-packages
+  if [ -d $INSTALL/usr/lib/python2.7/dist-packages ]; then 
+    mv $INSTALL/usr/lib/python2.7/dist-packages $INSTALL/usr/lib/python2.7/site-packages
+  fi
 }
