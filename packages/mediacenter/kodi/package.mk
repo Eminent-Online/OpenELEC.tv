@@ -344,6 +344,11 @@ make_target() {
   sed -i -e "s|skin.confluence|$SKIN_DIR|g" $ROOT/$PKG_BUILD/xbmc/settings/Settings.h
   sed -i -e "s|skin.confluence|$SKIN_DIR|g" $ROOT/$PKG_BUILD/system/settings/settings.xml
 
+  if [ -f $PROJECT_DIR/$PROJECT/kodi/kodi-logo.png ]; then
+   mkdir -p $ROOT/$PKG_BUILD/addons/skin.confluence/media
+   cp -f $PROJECT_DIR/$PROJECT/kodi/kodi-logo.png $ROOT/$PKG_BUILD/addons/skin.confluence/media/kodi-logo.png
+  fi
+
   make externals
   make kodi.bin
 
@@ -422,6 +427,14 @@ post_makeinstall_target() {
       cp -R $PROJECT_DIR/$PROJECT/kodi/sources.xml $INSTALL/usr/share/kodi/config
     fi
 
+    if [ -f $PROJECT_DIR/$PROJECT/kodi/weather.yahoo.settings.xml ]; then
+      cp -R $PROJECT_DIR/$PROJECT/kodi/weather.yahoo.settings.xml $INSTALL/usr/share/kodi/config
+    fi
+
+    if [ -f $PROJECT_DIR/$PROJECT/kodi/gen.xml ]; then
+      cp -R $PROJECT_DIR/$PROJECT/kodi/gen.xml $INSTALL/usr/share/kodi/config
+    fi
+
   mkdir -p $INSTALL/usr/share/kodi/system/
     if [ -f $PROJECT_DIR/$PROJECT/kodi/advancedsettings.xml ]; then
       cp $PROJECT_DIR/$PROJECT/kodi/advancedsettings.xml $INSTALL/usr/share/kodi/system/
@@ -439,6 +452,20 @@ post_makeinstall_target() {
   if [ "$KODI_EXTRA_FONTS" = yes ]; then
     mkdir -p $INSTALL/usr/share/kodi/media/Fonts
       cp $PKG_DIR/fonts/*.ttf $INSTALL/usr/share/kodi/media/Fonts
+  fi
+
+  if [ -f $PROJECT_DIR/$PROJECT/kodi/Splash.png ]; then
+   cp -f $PROJECT_DIR/$PROJECT/kodi/Splash.png $INSTALL/usr/share/kodi/media
+  fi
+
+  if [ -f $PROJECT_DIR/$PROJECT/kodi/confl.skin.settings.xml ]; then
+   mkdir -p $INSTALL/usr/share/kodi/config
+   cp -f $PROJECT_DIR/$PROJECT/kodi/confl.skin.settings.xml $INSTALL/usr/share/kodi/config
+  fi
+
+  if [ -f $PROJECT_DIR/$PROJECT/kodi/Splash.png ]; then
+   mkdir -p $INSTALL/usr/share/kodi/media
+   cp -f $PROJECT_DIR/$PROJECT/kodi/Splash.png $INSTALL/usr/share/kodi/media
   fi
 }
 

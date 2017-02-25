@@ -22,11 +22,35 @@
 # done in kodi on addon install. but just in case..
 chmod +x /storage/.kodi/addons/*/bin/*
 
-# hack: update RSSnews.xml in userdata
-if [ -f /storage/.kodi/userdata/RssFeeds.xml ]; then
-  sed -e "s,http://openelec.tv/news?format=feed&type=rss,http://feeds.openelec.tv/news,g" \
-      -i /storage/.kodi/userdata/RssFeeds.xml
+# setup Kodi sources
+if [ ! -f $HOME/.kodi/userdata/keymaps/gen.xml ]; then
+  if [ -f /usr/share/kodi/config/gen.xml ]; then
+    mkdir -p $HOME/.kodi/userdata/keymaps
+    cp /usr/share/kodi/config/gen.xml $HOME/.kodi/userdata/keymaps/gen.xml
+  fi
 fi
+
+# setup Kodi sources
+if [ ! -f $HOME/.kodi/userdata/addon_data/skin.confluence/settings.xml ]; then
+  if [ -f /usr/share/kodi/config/confl.skin.settings.xml ]; then
+    mkdir -p $HOME/.kodi/userdata/addon_data/skin.confluence
+    cp /usr/share/kodi/config/confl.skin.settings.xml $HOME/.kodi/userdata/addon_data/skin.confluence/settings.xml
+  fi
+fi
+
+# setup Kodi sources
+if [ ! -f $HOME/.kodi/userdata/addon_data/weather.yahoo/settings.xml ]; then
+  if [ -f /usr/share/kodi/config/weather.yahoo.settings.xml ]; then
+    mkdir -p $HOME/.kodi/userdata/addon_data/weather.yahoo
+    cp /usr/share/kodi/config/weather.yahoo.settings.xml $HOME/.kodi/userdata/addon_data/weather.yahoo/settings.xml
+  fi
+fi
+
+# hack: update RSSnews.xml in userdata
+#if [ -f /storage/.kodi/userdata/RssFeeds.xml ]; then
+#  sed -e "s,http://openelec.tv/news?format=feed&type=rss,http://feeds.openelec.tv/news,g" \
+#      -i /storage/.kodi/userdata/RssFeeds.xml
+#fi
 
 # setup Kodi sources
 if [ ! -f $HOME/.kodi/userdata/sources.xml ]; then
